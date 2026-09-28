@@ -1,0 +1,13 @@
+# generated / private data (never commit church data)
+databank.sqlite
+Operations_Dashboard.xlsx
+inbox/*
+!inbox/.gitkeep
+archive/*
+!archive/.gitkeep
+demo/
+__pycache__/
+.pytest_cache/
+*_recalc.xlsx
+~$*
+output/Operations_Dashboard_DEMO.xlsx

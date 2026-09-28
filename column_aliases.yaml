@@ -1,0 +1,34 @@
+# Column alias map used by ingest.py
+#
+# Left: the field name the system uses.  Right: every header spelling that
+# means the same thing.  Matching ignores case, spaces and punctuation, so
+# "No. of Males", "no of males" and "NO_OF_MALES" are all the same entry.
+# Add a new spelling to the list when a file arrives with a header the
+# ingester does not recognise (it will say which header in its summary).
+
+date:           [date, report date, service date, meeting date, week ending, week ending date, week, day]
+area:           [area, area name, facility, area facility, area id]
+zone:           [zone, zone name, zonal, zone id, zonal name]
+cell:           [cell, cell name, cell id, cell code, wsf cell]
+church:         [church, church name, community church, community, church id, location]
+service_type:   [service type, service, meeting type]
+stream:         [stream, report type, programme, program]
+
+male:           [male, males, men, no of males, number of males, m]
+female:         [female, females, women, no of females, number of females, f]
+children:       [children, child, kids, no of children, number of children, c]
+adult_total:    [adult total, adults, total adults, adult]
+grand_total:    [grand total, total, total attendance, overall total]
+cells_total:    [cells total, total cells, no of cells, operational cells]
+cells_reported: [cells reported, reporting cells, no of cells reported, cells that reported]
+
+vehicle_id:     [vehicle id, vehicle, bus id, bus, bus no, bus number, plate number, reg no]
+category:       [category, fleet category, bus type, vehicle type, fleet type]
+trips:          [trips, no of trips, number of trips, trip count]
+ridership:      [ridership, riders, riders carried, passengers, no of riders]
+operational:    [operational, operational flag, is operational, status, working]
+hired_by_type:  [hired by type, hired by, hirer type]
+
+cost_type:      [cost type, expense type, cost category, expense, cost item]
+amount:         [amount, amount ngn, cost, value, naira, amount naira]
+paid_by:        [paid by, payer, funded by]

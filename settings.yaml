@@ -1,0 +1,7 @@
+# Operations Dashboard settings used by ingest.py and build_workbook.py
+# week_end_day: 1=Monday ... 6=Saturday, 7=Sunday
+week_end_day: 7
+currency_symbol: ₦
+wsf_cells_weeks_in_workbook: 8
+calendar_start_year: 2024
+calendar_years: 7
