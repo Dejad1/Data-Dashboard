@@ -12,7 +12,7 @@ inbox/ (weekly files)  ──ingest.py──►  databank.sqlite  ──build_wo
 
 | Stage | Status |
 |---|---|
-| Masters, Calendar, SETTINGS | Done. The real 92 Areas and a draft of 1,164 zone codes are in `masters/` |
+| Masters, Calendar, SETTINGS | Done. The real 92 Areas and 1,240 zones (from ZONE DETAILS) are in `masters/` |
 | Data tables and ingestion (alias map, de-duplication, data-quality log) | Done |
 | **WSF DASHBOARD** | Done, ready for review |
 | **TRANSPORT DASHBOARD** | Done, built on the transport office's real reports (from 27 Sept 2026) |
@@ -27,7 +27,7 @@ inbox/ (weekly files)  ──ingest.py──►  databank.sqlite  ──build_wo
    | File | Columns |
    |---|---|
    | `MASTER_AREAS.csv` | Area_ID, Area_Name, Active (Y/N), Area_No, Aliases (other spellings, separated by `;`) |
-   | `MASTER_ZONES.csv` | Zone_ID, Zone_Name, Area_Name, Has_CHOP (Y/N), Active (Y/N). Zones use their codes, e.g. `LFC0112` = Area 01, Zone 12 |
+   | `MASTER_ZONES.csv` | Zone_ID, Zone_Name, Area_Name, Has_CHOP (Y/N), Active (Y/N), Zone_No, Address, Zone_Status. Built from the ZONE DETAILS workbook (see below) |
    | `MASTER_CELLS.csv` | Cell, Zone_Name, Operational (Y/N) |
    | `MASTER_COMMUNITY.csv` | Church_ID, Church_Name, Location, Active (Y/N) |
    | `MASTER_FLEET.csv` | Vehicle_ID, Category, Capacity, Owner, Status, Area_Name, Zone_Name, Hired_By_Type (reference list only; transport is loaded from the weekly reports) |
@@ -54,12 +54,32 @@ inbox/ (weekly files)  ──ingest.py──►  databank.sqlite  ──build_wo
 
 Processed files move to `inbox/processed/`. Files that couldn't be recognised go to `inbox/unrecognised/`.
 
+## Zones (ZONE DETAILS)
+
+Zones are identified by their **zincode**, which must be unique. `LFC0112` means Area 01, Zone 12. The zone list is the ZONE DETAILS workbook:
+- the **ZONES** sheet holds existing zones;
+- the **NEW ZONES** sheet holds proposed ones.
+
+Drop an updated ZONE DETAILS file in the inbox and `ingest.py` rebuilds `masters/MASTER_ZONES.csv` before loading the other files. Has_CHOP flags already set are kept. Each rule below is logged on DATA QUALITY:
+
+- **Codes are tidied.** Spellings such as `LFC 0701`, `LFCO702` and `LFC92016` are read correctly.
+- **Wrong Area digits are corrected.** A code whose Area digits disagree with its Area takes the Area's number, e.g. `LFC6714` under Area 87 becomes `LFC8714`.
+- **Missing codes are inferred** from "ZONE n", as long as that code is free.
+- **Duplicates are merged.** A zone listed twice is kept once, and a "new" zone whose address matches an existing zone is recognised as already listed.
+- **Clashes are flagged.** A new zone that proposes a code already held by a different zone is listed for the Area to renumber.
+- **Report-only codes are kept.** Codes found in the transport reports but missing from the list are marked "Seen in reports only".
+
+**The transport reports use the zone list:**
+- a blank loading-bay address is filled from the zone's address;
+- an address with no code is matched to its zone within the Area;
+- a row with no Area name takes its Area from the zone code.
+
 ## Adding things
 
 | To add | Do this, then run `python ingest.py` |
 |---|---|
 | a new **Area** | Add a row to `MASTER_AREAS.csv`. |
-| a new **Zone** | Add a row to `MASTER_ZONES.csv` with its Area_Name, Has_CHOP and Active = Y. |
+| a new **Zone** | Add it to the ZONE DETAILS workbook (NEW ZONES sheet, with its proposed zincode) and drop the file in the inbox. |
 | a new **Cell** | Add a row to `MASTER_CELLS.csv` with its Zone_Name and Operational = Y. Set Operational = N to take a cell out of the reporting universe without deleting its history. |
 | a new **CHOP zone** | Set Has_CHOP = Y on that zone in `MASTER_ZONES.csv`. CHOP rows from zones with Has_CHOP = N are rejected. |
 | a new **bus** | Nothing to do. Buses are read from the weekly transport reports. To change an Area's FT allocation or approved cost per bus, update the FT Procured allocation file and send it with that week's reports. |

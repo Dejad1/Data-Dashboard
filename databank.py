@@ -180,7 +180,8 @@ class Databank:
 MASTER_FILES = {
     # Area_Name must stay the 2nd column: workbook formulas read MASTER_AREAS!B:B
     "areas": ("MASTER_AREAS.csv", ["Area_ID", "Area_Name", "Active", "Area_No", "Aliases"]),
-    "zones": ("MASTER_ZONES.csv", ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active"]),
+    "zones": ("MASTER_ZONES.csv", ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active", "Zone_No", "Address",
+                                   "Zone_Status"]),
     "cells": ("MASTER_CELLS.csv", ["Cell", "Zone_Name", "Operational"]),
     "community": ("MASTER_COMMUNITY.csv", ["Church_ID", "Church_Name", "Location", "Active"]),
     "fleet": ("MASTER_FLEET.csv", ["Vehicle_ID", "Category", "Capacity", "Owner", "Status",
@@ -188,7 +189,7 @@ MASTER_FILES = {
 }
 
 # Columns that may be missing from older master files (filled with blanks)
-OPTIONAL_COLUMNS = {"Area_No", "Aliases"}
+OPTIONAL_COLUMNS = {"Area_No", "Aliases", "Zone_No", "Address", "Zone_Status"}
 
 
 def norm_key(value) -> str:
@@ -200,6 +201,13 @@ def norm_key(value) -> str:
 
 def yes(value) -> bool:
     return str(value).strip().lower() in {"y", "yes", "true", "1", "active", "operational"}
+
+
+def _similar(a: str, b: str) -> float:
+    import difflib
+    if (a in b or b in a) and min(len(a), len(b)) >= 10:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
 
 
 @dataclass
@@ -227,6 +235,7 @@ class Masters:
             else:
                 frames[key] = pd.DataFrame(columns=cols)
         m = cls(**frames)
+        m.folder = Path(folder)
         m._index()
         return m
 
@@ -237,6 +246,21 @@ class Masters:
             path = folder / fname
             if not path.exists():
                 pd.DataFrame(columns=cols).to_csv(path, index=False)
+
+    def zone_for_address(self, address, area: str) -> str | None:
+        """Zone code whose master address clearly matches a loading-bay address in the same Area."""
+        target = norm_key(address) if address is not None else ""
+        if len(target) < 6 or not area:
+            return None
+        scored = [(_similar(target, norm_key(addr)), code) for code, addr in self.zone_addresses.get(area, [])]
+        scored = [x for x in scored if x[0] >= 0.85]
+        if not scored:
+            return None
+        scored.sort(reverse=True)
+        # only when one zone clearly wins
+        if len(scored) > 1 and scored[0][0] == scored[1][0] and scored[0][1] != scored[1][1]:
+            return None
+        return scored[0][1]
 
     def _index(self) -> None:
         z = self.zones
@@ -250,6 +274,11 @@ class Masters:
         self.zone_by_key = {norm_key(n): n for n in z["Zone_Name"]}
         self.zone_by_key.update({norm_key(i): n for i, n in zip(z["Zone_ID"], z["Zone_Name"])})
         self.zone_area = dict(zip(z["Zone_Name"], z["Area_Name"]))
+        self.zone_address = dict(zip(z["Zone_Name"], z["Address"]))
+        self.zone_addresses: dict[str, list] = {}
+        for code, area, addr in zip(z["Zone_Name"], z["Area_Name"], z["Address"]):
+            if str(addr).strip():
+                self.zone_addresses.setdefault(area, []).append((code, addr))
         self.zone_has_chop = {n: yes(f) for n, f in zip(z["Zone_Name"], z["Has_CHOP"])}
         self.active_zones = z.loc[z["Active"].map(yes), ["Zone_Name", "Area_Name"]]
         c = self.cells

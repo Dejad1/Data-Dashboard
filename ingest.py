@@ -25,6 +25,7 @@ import pandas as pd
 import yaml
 
 import transport_reports
+import zone_master
 from config import ALIASES_FILE, COMMUNITY_SERVICE_TYPES, HERE, Paths, load_settings, week_ending
 from databank import Databank, Masters, norm_key, yes
 
@@ -447,6 +448,20 @@ TRANSPORT_TABLES = {
 }
 
 
+def update_zone_master(zone_sheets: dict, db: Databank, m: Masters, file_name: str, loaded_on: str,
+                       summary: dict) -> None:
+    """Rebuild masters/MASTER_ZONES.csv from a ZONE DETAILS workbook."""
+    seen = {z: a for z, a in db.execute("SELECT DISTINCT zone_code, area FROM transport_runs WHERE zone_code <> ''")
+            if z}
+    master, issues = zone_master.build(zone_sheets, m, m.zones, seen)
+    path = m.folder / "MASTER_ZONES.csv"
+    master.to_csv(path, index=False)
+    db.log_issues([dict(i, logged_on=loaded_on, source_file=file_name, stream="ZONE MASTER", week_ending=None)
+                   for i in issues])
+    summary["ZONE MASTER"] = [len(master), 0, sum(1 for i in issues if i["severity"] == "Rejected")]
+    summary["_masters_changed"] = True
+
+
 def tag_coaster_locations(db: Databank, week: str) -> None:
     """Coasters run from Hubs unless the fuel schedule marks the coaster ZONE (a loading bay)."""
     db.execute("""
@@ -518,7 +533,12 @@ def process_file(path: Path, db: Databank, m: Masters, settings, aliases, loaded
                  wsf_weeks: set) -> bool:
     cal = calendar_range(settings)
     recognised = False
-    for sheet, raw in read_sheets(path):
+    sheets = read_sheets(path)
+    zone_sheets = {name: raw for name, raw in sheets if zone_master.is_zone_details(raw)}
+    if zone_sheets:
+        update_zone_master(zone_sheets, db, m, path.name, loaded_on, summary)
+        return True
+    for sheet, raw in sheets:
         report = transport_reports.read(raw, sheet, path.name, m, settings)
         if report is not None:
             load_transport_report(report, db, path.name, sheet, settings, loaded_on, summary)
@@ -591,11 +611,15 @@ def run(root: Path, build: bool = True, quiet: bool = False) -> dict:
     loaded_on = dt.datetime.now().replace(microsecond=0).isoformat(sep=" ")
     summary: dict[str, list[int]] = {}
     wsf_weeks: set[str] = set()
-    files = sorted(p for p in paths.inbox.iterdir()
-                   if p.is_file() and p.suffix.lower() in (".xlsx", ".xlsm", ".csv") and not p.name.startswith("~$"))
+    # zone lists go first so the reports in the same batch can use the new zones
+    files = sorted((p for p in paths.inbox.iterdir()
+                    if p.is_file() and p.suffix.lower() in (".xlsx", ".xlsm", ".csv") and not p.name.startswith("~$")),
+                   key=lambda p: ("zone" not in p.name.lower(), p.name))
     for path in files:
         try:
             ok = process_file(path, db, m, settings, aliases, loaded_on, summary, wsf_weeks)
+            if summary.pop("_masters_changed", False):
+                m = Masters.load(paths.masters)
         except Exception as exc:  # a broken file must not stop the others
             db.log_issues([{"logged_on": loaded_on, "source_file": path.name, "sheet": "", "source_row": None,
                             "stream": "?", "severity": "Rejected", "issue": "File could not be read",

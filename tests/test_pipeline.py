@@ -147,7 +147,8 @@ def test_real_transport_samples_27_sept(tmp_path):
     (root / "masters").mkdir(parents=True)
     shutil.copy(HERE.parent / "masters" / "MASTER_AREAS.csv", root / "masters" / "MASTER_AREAS.csv")
     (root / "inbox").mkdir()
-    for pattern in ("*Transport_raw_reports*", "*FT_COASTERS_FUELING*", "*FT_PROCURED_FOR*", "*EV__Tata*"):
+    for pattern in ("*Transport_raw_reports*", "*FT_COASTERS_FUELING*", "*FT_PROCURED_FOR*", "*EV__Tata*",
+                    "*ZONE_DETAILS*"):
         for f in list(SAMPLES.glob(pattern))[:1]:
             shutil.copy(f, root / "inbox" / f.name)
     ingest.run(root, build=False, quiet=True)
@@ -164,6 +165,10 @@ def test_real_transport_samples_27_sept(tmp_path):
     assert q("SELECT COUNT(*) FROM transport_runs WHERE category='Church Coaster' AND location_type='Loading Bay'") == (46,)
     assert q("SELECT COUNT(*) FROM transport_runs WHERE report='EV_TATA_REPORT' AND location_type<>'Hub'") == (0,)
     assert q("SELECT severity FROM dq_log WHERE issue LIKE 'Hub Payment Summary%'") == ("Info",)
+    if list(SAMPLES.glob("*ZONE_DETAILS*")):
+        # the zone list fills loading-bay addresses the FT sheet left blank, and WSF Procured locations
+        assert q("SELECT COUNT(*) FROM transport_runs WHERE category='FT Procured' AND location<>''")[0] >= 955
+        assert q("SELECT COUNT(*) FROM transport_runs WHERE category='WSF Procured' AND location<>''")[0] >= 274
     # coaster fuel actually paid (HUB coasters) = ₦7,574,800
     assert q("SELECT SUM(amount) FROM transport_costs WHERE payable='Y'") == (7574800.0,)
     assert q("SELECT COUNT(*) FROM transport_budget") == (92,)
@@ -333,3 +338,36 @@ def test_empty_workbook_has_no_errors(root, tmp_path):
     got = calc_values(out)
     assert got["card"] == "–"
     assert got["status"].startswith("No WSF data loaded yet")
+
+
+def test_zone_master_rules(tmp_path):
+    """ZONE DETAILS: codes normalised and corrected to their Area, duplicates and clashes handled."""
+    import zone_master
+    from databank import Masters
+    (tmp_path / "masters").mkdir()
+    pd.DataFrame([{"Area_ID": "A01", "Area_Name": "CANAANLAND 2", "Active": "Y", "Area_No": "1", "Aliases": ""},
+                  {"Area_ID": "A87", "Area_Name": "ILOGBO OKOKO", "Active": "Y", "Area_No": "87",
+                   "Aliases": "ILOGBO-OKOKO"}]).to_csv(tmp_path / "masters" / "MASTER_AREAS.csv", index=False)
+    m = Masters.load(tmp_path / "masters")
+    zones = pd.DataFrame([["area number", "area name", "Zone", "Zin Codes"],
+                          [1, "CANAANLAND 2", "Zone 1 - 51/53 IGE DARAMOLA", "LFC 0101"],
+                          [1, "CANAANLAND 2", "Zone 2 - 9 BENJA ROAD, OTA", "lfcO102"],
+                          [1, "CANAANLAND 2", "Zone 2 - 9 BENJA ROAD, OTA", "LFC0102"],      # listed twice
+                          [1, "CANAANLAND 2", "Zone 3 - 1 JESU O SEUN STREET", None],         # no code
+                          [87, "ILOGBO-OKOKO", "Zone 14 - JESAB ZONE", "LFC6714"]])          # wrong Area digits
+    new = pd.DataFrame([["AREA NAME(YABA)", "AREA NO(15)", "ZONAL ADDRESS", "PROPOSED ZONAL NO (LFC1511)"],
+                        ["CANAANLAND 2", 1, "9 BENJA ROAD OTA", "LFC0102"],                  # already listed
+                        ["CANAANLAND 2", 1, "5 NEW ROAD, OTA", "LFC0101"],                   # clashes
+                        ["CANAANLAND 2", 1, "7 FRESH STREET", "LFC0104"]])
+    df, issues = zone_master.build({"ZONES": zones, "NEW ZONES": new}, m, m.zones, {"LFC0199": "CANAANLAND 2"})
+    got = dict(zip(df.Zone_ID, df.Zone_Status))
+    assert got == {"LFC0101": "Existing", "LFC0102": "Existing", "LFC0103": "Existing", "LFC0104": "New (proposed)",
+                   "LFC0199": "Seen in reports only", "LFC8714": "Existing"}
+    assert df.Zone_ID.is_unique
+    kinds = {i["issue"] for i in issues}
+    assert {"Zone code corrected to its Area", "Zone listed twice", "Zone code inferred", "New zone already listed",
+            "Proposed code already in use", "Zone code not in ZONE DETAILS"} <= kinds
+    df.to_csv(tmp_path / "masters" / "MASTER_ZONES.csv", index=False)
+    m2 = Masters.load(tmp_path / "masters")
+    assert m2.zone_for_address("9, Benja Road, Ota", "CANAANLAND 2") == "LFC0102"
+    assert m2.zone_address["LFC8714"] == "JESAB ZONE"

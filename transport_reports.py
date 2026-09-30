@@ -227,6 +227,9 @@ def read_ft_procured(raw, hdr, match, settings, when) -> Parsed:
             continue
         area = match(name, row[ci["area_no"]])
         if area is None:
+            # no usable Area name: the zone code says which Area the bus belongs to
+            area = match.m.zone_area.get(zone_code(row[ci["zone"]]) or "")
+        if area is None:
             p.issue("Rejected", "Unknown Area", f"Area '{name}' / no. {row[ci['area_no']]} not in MASTER_AREAS",
                     excel_row)
             continue
@@ -258,6 +261,13 @@ def read_ft_procured(raw, hdr, match, settings, when) -> Parsed:
                                                  "computed value used", excel_row)
         in_church = "Y" if num(row[ci["in_church"]]) else "N"
         z = zone_code(row[ci["zone"]])
+        addr = "" if blank(row[ci["addr"]]) else str(row[ci["addr"]]).strip()
+        if z is None and addr:
+            z = match.m.zone_for_address(addr, area)
+            if z:
+                p.issue("Info", "Zone code filled from address", f"'{addr}' matches {z} in {area}", excel_row)
+        if not addr and z:
+            addr = match.m.zone_address.get(z, "")
         if z and match.number_of(area) and int(z[3:5]) != match.number_of(area):
             p.issue("Warning", "Zone code outside its Area", f"{row[ci['zone']]} listed under {area}", excel_row)
         status = "Ran" if riders else "No riders reported"
@@ -267,7 +277,7 @@ def read_ft_procured(raw, hdr, match, settings, when) -> Parsed:
             vtype = "Smaller than LT"
         else:
             vtype = "LT 22-seater"
-        p.rows.append([None, when, p.layout, "FT Procured", vtype, area, z, row[ci["addr"]] if not blank(row[ci["addr"]]) else "",
+        p.rows.append([None, when, p.layout, "FT Procured", vtype, area, z, addr,
                        "", 1, cap, 1, male, female, children, cost or 0, "Central", status, "",
                        "", "" if blank(row[ci["remarks"]]) else str(row[ci["remarks"]]), in_church, "Loading Bay",
                        excel_row])
@@ -406,7 +416,8 @@ def read_wsf_procured(raw, hdr, match, settings, when) -> Parsed:
             p.issue("Warning", "Capacity missing", f"{int(buses)} bus(es), capacity not given; "
                                                    "utilisation not calculated for this zone", excel_row)
         z = zone_code(row[zcol]) if zcol is not None else None
-        p.rows.append([None, when, p.layout, "WSF Procured", "Hired by zone", area, z, "", "", int(buses), cap, 1,
+        p.rows.append([None, when, p.layout, "WSF Procured", "Hired by zone", area, z,
+                       match.m.zone_address.get(z, "") if z else "", "", int(buses), cap, 1,
                        male, female, children, num(row[ci["cost"]]) or 0, "Members", "Ran", "", "",
                        "" if ci["rem"] is None or blank(row[ci["rem"]]) else str(row[ci["rem"]]), "", "Loading Bay",
                        excel_row])
