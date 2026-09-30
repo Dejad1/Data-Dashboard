@@ -7,6 +7,7 @@ instead of double counting.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,7 +151,8 @@ class Databank:
 # --------------------------------------------------------------------------
 
 MASTER_FILES = {
-    "areas": ("MASTER_AREAS.csv", ["Area_ID", "Area_Name", "Active"]),
+    # Area_Name must stay the 2nd column: workbook formulas read MASTER_AREAS!B:B
+    "areas": ("MASTER_AREAS.csv", ["Area_ID", "Area_Name", "Active", "Area_No", "Aliases"]),
     "zones": ("MASTER_ZONES.csv", ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active"]),
     "cells": ("MASTER_CELLS.csv", ["Cell", "Zone_Name", "Operational"]),
     "community": ("MASTER_COMMUNITY.csv", ["Church_ID", "Church_Name", "Location", "Active"]),
@@ -158,10 +160,15 @@ MASTER_FILES = {
                                    "Area_Name", "Zone_Name", "Hired_By_Type"]),
 }
 
+# Columns that may be missing from older master files (filled with blanks)
+OPTIONAL_COLUMNS = {"Area_No", "Aliases"}
+
 
 def norm_key(value) -> str:
-    """Case/space-insensitive key used to match names from incoming files."""
-    return " ".join(str(value).strip().lower().split())
+    """Matching key for names from incoming files: letters and digits only, lower case.
+
+    "IYANA- ODO", "Iyana Odo" and "IYANA-ODO" all become "iyanaodo"."""
+    return re.sub(r"[^a-z0-9]", "", str(value).replace("\u2011", "-").lower())
 
 
 def yes(value) -> bool:
@@ -183,6 +190,9 @@ class Masters:
             path = folder / fname
             if path.exists():
                 df = pd.read_csv(path, dtype=str, keep_default_na=False)
+                for c in OPTIONAL_COLUMNS & set(cols):
+                    if c not in df.columns:
+                        df[c] = ""
                 missing = [c for c in cols if c not in df.columns]
                 if missing:
                     raise ValueError(f"{fname} is missing columns: {missing}")
@@ -203,8 +213,13 @@ class Masters:
 
     def _index(self) -> None:
         z = self.zones
-        self.area_by_key = {norm_key(a): a for a in self.areas["Area_Name"]}
-        self.area_by_key.update({norm_key(i): a for i, a in zip(self.areas["Area_ID"], self.areas["Area_Name"])})
+        self.area_by_key = {}
+        for _, r in self.areas.iterrows():
+            keys = [r["Area_Name"], r["Area_ID"], r["Area_No"]] + str(r["Aliases"]).split(";")
+            for k in keys:
+                if str(k).strip():
+                    self.area_by_key[norm_key(k)] = r["Area_Name"]
+        self.area_no = {r["Area_No"]: r["Area_Name"] for _, r in self.areas.iterrows() if str(r["Area_No"]).strip()}
         self.zone_by_key = {norm_key(n): n for n in z["Zone_Name"]}
         self.zone_by_key.update({norm_key(i): n for i, n in zip(z["Zone_ID"], z["Zone_Name"])})
         self.zone_area = dict(zip(z["Zone_Name"], z["Area_Name"]))
