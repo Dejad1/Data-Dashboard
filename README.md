@@ -14,10 +14,9 @@ inbox/ (weekly files)  ──ingest.py──►  databank.sqlite  ──build_wo
 |---|---|
 | Masters, Calendar, SETTINGS | Done. The real 92 Areas and 1,240 zones (from ZONE DETAILS) are in `masters/` |
 | Data tables and ingestion (alias map, de-duplication, data-quality log) | Done |
-| **WSF DASHBOARD** | Done, ready for review |
+| **WSF, MIDWEEK, CHOP, COMMUNITY CHURCH dashboards** | Done, built on the reporting system's exports and the Community Sunday workbook (Sept 2026) |
 | **TRANSPORT DASHBOARD** | Done, built on the transport office's real reports (from 27 Sept 2026) |
-| Midweek, CHOP, Community dashboards; Area and Zone scorecards | Next, as their sample files arrive. Their data already loads into the `DATA_*` sheets. |
-| Master dashboard | After the stream dashboards |
+| Area and Zone scorecards, Master dashboard | Next |
 
 ## One-time setup
 
@@ -125,6 +124,31 @@ The WSF DASHBOARD has these sections:
 - **Who didn't report**: cells with no WSF return for the selected week, filtered by the current scope.
 
 A "–" means there is no data for that figure. A real zero shows as 0.
+
+## Services (WSF, Midweek, CHOP, Community Churches)
+
+**What `ingest.py` reads, as the reporting system exports it:**
+- the "Area By Area" reports: `CELL SERVICE…` (WSF), `MID-WEEK SERVICE…` and `ALL CHOP…`;
+- the **Community Church Sunday** workbook, with one sheet per month and one block of columns per Sunday.
+
+**How the exports are read:**
+- A zone's code is its Area code plus its zone code, e.g. Area 004 zone 12 becomes `LFC0412`. The report date comes from the file name.
+- Zones the system flags **forCommunity** are the 35 **Community Churches**. Their WSF, Midweek and CHOP figures go to the Community tables and are never added into zonal totals.
+- A zone registered twice in the system is added up once.
+- Attendance an Area reports above its zones is kept as an **AREA LEVEL** row. Most CHOP is reported this way, at the Area facility.
+- Minister names and phone numbers are never read.
+
+**Compliance** uses the system's own count of zones with a report, minus the Community Churches:
+- Midweek: zones with a report ÷ all zones;
+- CHOP: CHOP zones with a report ÷ CHOP zones;
+- WSF: cells reported ÷ cells, by zone.
+
+**Master lists.** The exports also keep the Zone master up to date: CHOP zones (673), Community Churches (35) and zones missing from ZONE DETAILS.
+
+**The Community Church Sunday workbook:**
+- It also carries the pastors present, shown as 0 to 2 per church.
+- Blocks dated outside their sheet's month, left over from an old template, are skipped.
+- A code typed without its Area digits, e.g. `LFC319` under Area 35, is corrected to `LFC3519`.
 
 ## Transport
 

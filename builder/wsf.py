@@ -16,7 +16,7 @@ from .common import (BOX, CENTER, FMT_DEC1, FMT_INT, FMT_INT0, FMT_PCT, FMT_PCT_
                      RED_FG, RIGHT, WHITE, arrow_rules, dashboard_canvas, fill, font, put, q, rag_rules,
                      section_title, side, signed_rules, tint)
 from .controls import SCOPE, SELECT, WEEK, WINDOW, control_strip, search_helper, week_list
-from .data import CELLS_CURRENT, SPECS
+from .data import SPECS
 
 DASH = "WSF DASHBOARD"
 CALC = "CALC_WSF"
@@ -81,7 +81,8 @@ def build_calc(wb, n_areas: int):
         ("Any WSF data", "=B9>0"),
         ("Scope label", '=IF(B3="Global","All Areas",IF(B3="Area","Area: "&IF(B4="","(none selected)",B4),'
                         '"Zone: "&IF(B4="","(none selected)",B4&IF(B8="",""," ("&B8&")"))))'),
-        ("Zones with zero cells reporting", f'=IF(B10=0,0,COUNTIFS({W},B10,{A},B6,{Z},B7,{d.ref("Cells_Reported")},0))'),
+        ("Zones with zero cells reporting", f'=IF(B10=0,0,COUNTIFS({W},B10,{A},B6,{Z},B7,{d.ref("Cells_Reported")},0,'
+                                            f'{d.ref("Cells_Total")},">0"))'),
     ]
     for i, (label, formula) in enumerate(inputs, start=3):
         ws[f"A{i}"] = label
@@ -219,18 +220,19 @@ def build_calc(wb, n_areas: int):
                         f'INDEX({area_rng(score)},MATCH($B$4,{area_rng("W")},0)))+1,""))')
     ws["AJ18"] = f"=COUNT({area_rng('AE')})"
 
-    # ---- non-reporting cells list ------------------------------------------------
-    cc = CELLS_CURRENT
-    helper = cc.ref("List_Helper")
-    ws["AW1"] = "Non-reporting cells in scope"
-    ws["AX1"] = f"=COUNT({helper})"
-    ws["AW2"] = "Cell detail held for selected week"
-    ws["AX2"] = f'=COUNTIF({cc.ref("Week_Ending")},$B$10)>0'
+    # ---- who didn't report: zones with cells missing a report --------------------------
+    helper = d.ref("List_Helper")
+    ws["AW1"] = "Cells without a report in scope"
+    ws["AX1"] = f"=IF(B10=0,0,SUMIFS({d.ref('Cells_Not_Reported')},{W},B10,{A},B6,{Z},B7))"
+    ws["AW2"] = "Zones with cells missing a report"
+    ws["AX2"] = f"=COUNT({helper})"
     for k in range(1, NR_ROWS + 1):
         r = NR0 + k
         ws[f"AW{r}"] = f'=IFERROR(SMALL({helper},{k}),"")'
-        for colL, src in (("AX", "Area"), ("AY", "Zone"), ("AZ", "Cell")):
-            ws[f"{colL}{r}"] = f'=IF($AW{r}="","",INDEX({cc.ref(src)},$AW{r}))'
+        for colL, src in (("AX", "Area"), ("AY", "Zone"), ("BA", "Cells_Total"), ("BB", "Cells_Reported"),
+                          ("BC", "Cells_Not_Reported")):
+            ws[f"{colL}{r}"] = f'=IF($AW{r}="","",INDEX({d.ref(src)},$AW{r}))'
+        ws[f"AZ{r}"] = (f'=IF($AW{r}="","",IFERROR(INDEX(MASTER_ZONES!$G:$G,MATCH($AY{r},MASTER_ZONES!$B:$B,0))&"",""))')
     return ws
 
 
@@ -399,17 +401,13 @@ def build_dashboard(wb, n_zones: int):
     _style_chart(trend)
     ws.add_chart(trend, "G28")
 
-    pct = LineChart()
+    pct = BarChart()
+    pct.type, pct.gapWidth = "col", 60
     _title(pct, "% cells reporting — last 13 weeks")
     pct.add_data(Reference(calc, min_col=5, min_row=104, max_row=117), titles_from_data=True)
     pct.set_categories(Reference(calc, min_col=1, min_row=105, max_row=117))
-    pct.series[0].graphicalProperties.line.solidFill = colour
-    pct.series[0].graphicalProperties.line.width = 28000
-    pct.series[0].marker.symbol = "circle"
-    pct.series[0].marker.size = 6
-    pct.series[0].marker.graphicalProperties.solidFill = colour
-    pct.series[0].marker.graphicalProperties.line.solidFill = colour
-    pct.series[0].smooth = False
+    pct.series[0].graphicalProperties.solidFill = tint(colour, 0.25)
+    pct.series[0].graphicalProperties.line.solidFill = tint(colour, 0.25)
     pct.y_axis.numFmt = "0%"
     pct.y_axis.scaling.min, pct.y_axis.scaling.max = 0, 1
     pct.legend = None
@@ -461,25 +459,24 @@ def build_dashboard(wb, n_zones: int):
         align=Alignment(wrap_text=True, vertical="top"), merge_to="O52")
 
     # ---- non-reporting list ----------------------------------------------------------
-    section_title(ws, 57, "Who didn't report — cells with no WSF return for the selected week", colour, last="O")
-    ws["B58"] = (f'=IF(NOT({C("$AX$2")}),"Cell-level detail is kept in the workbook for the latest '
-                 f'"&{8}&" weeks only; older weeks are in the archive folder (WSF_cells_YYYY.csv).",'
-                 f'TEXT({C("$AX$1")},"#,##0")&" cells did not report in this scope"&IF({C("$AX$1")}>{NR_ROWS},'
+    section_title(ws, 57, "Who didn't report — zones with cells missing a WSF report for the selected week",
+                  colour, last="O")
+    ws["B58"] = (f'=IF({C("$Q$21")}=0,"",TEXT({C("$AX$1")},"#,##0")&" cells without a report, in "'
+                 f'&TEXT({C("$AX$2")},"#,##0")&" zones"&IF({C("$AX$2")}>{NR_ROWS},'
                  f'" — showing the first {NR_ROWS}. Narrow with Scope = Area or Zone.",".")&'
                  f'"  Zones where no cell reported: "&TEXT({C("$B$17")},"#,##0")&".")')
     ws.merge_cells("B58:O58")
     ws["B58"].font = font(9, True, RED_FG)
-    for c1, c2, h in (("B", "D", "Area"), ("E", "H", "Zone"), ("I", "J", "Cell"), ("K", "L", "Week ending")):
-        put(ws, f"{c1}59", h, f=font(9, True, WHITE), bg=colour, align=LEFT, merge_to=f"{c2}59")
+    layout = (("B", "C", "Area", "AX", None), ("D", "E", "Zone", "AY", None), ("F", "K", "Zone address", "AZ", None),
+              ("L", None, "Cells", "BA", "#,##0"), ("M", None, "Reported", "BB", "#,##0"),
+              ("N", None, "Missing", "BC", "#,##0"))
+    for c1, c2, h, _, _ in layout:
+        put(ws, f"{c1}59", h, f=font(9, True, WHITE), bg=colour, align=LEFT, merge_to=f"{c2}59" if c2 else None)
     for k in range(NR_ROWS):
         r, cr = 60 + k, NR0 + 1 + k
-        for c1, c2, src in (("B", "D", "AX"), ("E", "H", "AY"), ("I", "J", "AZ")):
-            put(ws, f"{c1}{r}", f"={C(f'${src}${cr}')}", f=font(9), merge_to=f"{c2}{r}")
-        put(ws, f"K{r}", f'=IF({C(f"$AW${cr}")}="","",{C("$B$10")})', f=font(9), fmt="dd-mmm-yyyy",
-            merge_to=f"L{r}")
-        if k % 2 == 0:
-            for cc in "BCDEFGHIJKL":
-                ws[f"{cc}{r}"].fill = fill(tint(colour, 0.95))
+        for c1, c2, _, src, fmt in layout:
+            put(ws, f"{c1}{r}", f"={C(f'${src}${cr}')}", f=font(9), fmt=fmt, merge_to=f"{c2}{r}" if c2 else None,
+                bg=tint(colour, 0.95) if k % 2 == 0 else None)
     ws.print_area = f"A1:P{60 + NR_ROWS}"
     ws.print_title_rows = "1:5"
     return ws

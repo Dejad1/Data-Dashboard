@@ -19,6 +19,7 @@ from openpyxl import Workbook
 
 from builder import data as D
 from builder.home import build_home, build_placeholder
+from builder import community as community_dash, zonal
 from builder.transport import build_calc as build_transport_calc, build_dashboard as build_transport_dashboard
 from builder.wsf import build_calc as build_wsf_calc, build_dashboard as build_wsf_dashboard
 from config import COLOURS, HERE, Paths, load_settings
@@ -30,7 +31,8 @@ SHEET_ORDER = [
     "DATA_WSF", "WSF_CELLS_CURRENT", "DATA_MIDWEEK", "DATA_CHOP", "DATA_COMMUNITY", "DATA_TRANSPORT",
     "DATA_TRANSPORT_COSTS", "DATA_TRANSPORT_BUDGET", "DATA_SERVICE_AREAS",
     "MASTER_AREAS", "MASTER_ZONES", "MASTER_CELLS", "MASTER_COMMUNITY", "MASTER_FLEET",
-    "CALENDAR", "SETTINGS", "CALC_LISTS", "CALC_SEARCH", "CALC_WSF", "CALC_TRANSPORT",
+    "CALENDAR", "SETTINGS", "CALC_LISTS", "CALC_SEARCH", "CALC_WSF", "CALC_TRANSPORT", "CALC_MIDWEEK", "CALC_CHOP",
+    "CALC_COMMUNITY",
 ]
 
 TABLE_SOURCES = {
@@ -127,13 +129,14 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
     build_wsf_dashboard(wb, sizes["MASTER_ZONES"])
     top = build_transport_calc(wb, sizes["MASTER_AREAS"])
     build_transport_dashboard(wb, sizes["MASTER_ZONES"], top)
+    for z in (zonal.MIDWEEK, zonal.CHOP):
+        info = zonal.build_calc(wb, z, sizes["MASTER_AREAS"], sizes["MASTER_ZONES"])
+        zonal.build_dashboard(wb, z, sizes["MASTER_ZONES"], info)
+    info = community_dash.build_calc(wb, sizes["MASTER_COMMUNITY"])
+    community_dash.build_dashboard(wb, sizes["MASTER_ZONES"], info)
 
     placeholders = [
         ("MASTER DASHBOARD", "MASTER", "Global view of every stream side by side", "all DATA_*"),
-        ("MIDWEEK DASHBOARD", "MIDWEEK", "Zonal midweek services", "DATA_MIDWEEK"),
-        ("CHOP DASHBOARD", "CHOP", "Covenant Hour of Prayer (CHOP zones only)", "DATA_CHOP"),
-        ("COMMUNITY CHURCH DASHBOARD", "COMMUNITY", "35 Community Churches · Sunday service first",
-         "DATA_COMMUNITY"),
         ("AREA SCORECARD", "MASTER", "One Area across every stream, with rank among all Areas", "DATA_*"),
         ("ZONE SCORECARD", "MASTER", "One Zone across every stream", "DATA_*"),
     ]
@@ -141,9 +144,9 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
         build_placeholder(wb, sheet, key, sub, PLACEHOLDER_NOTE.format(data=data_sheet))
     cov, gaps = coverage_and_gaps(tables)
     D.write_data_quality(wb, dq, cov, gaps)
-    build_home(wb, stage_note="Build in progress: the WSF and TRANSPORT dashboards, data tables, masters, Calendar, "
-                              "SETTINGS and DATA QUALITY are complete. Midweek, CHOP, Community, the scorecards and "
-                              "the Master dashboard follow as their sample files arrive.")
+    build_home(wb, stage_note="Build in progress: the WSF, MIDWEEK, CHOP, COMMUNITY CHURCH and TRANSPORT dashboards, "
+                              "data tables, masters, Calendar, SETTINGS and DATA QUALITY are complete. The Area and "
+                              "Zone scorecards and the MASTER DASHBOARD come next.")
 
     wb._sheets = [wb[name] for name in SHEET_ORDER] + [s for s in wb._sheets if s.title not in SHEET_ORDER]
     wb.active = 0

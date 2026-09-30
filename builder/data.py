@@ -82,14 +82,27 @@ SPECS = {
         Column("Children", "children", fmt=FMT_INT0, width=9, kind="int"),
         Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11),
         *MINISTRY,
-        *AUDIT]),
+        *AUDIT,
+        # row number when this zone has cells missing a report inside the WSF DASHBOARD filter
+        Column("List_Helper", formula='=IF(AND({Week_Ending}{r}=CALC_WSF!$B$10,{Cells_Total}{r}>0,'
+                                      '{Cells_Reported}{r}<{Cells_Total}{r},'
+                                      'OR(CALC_WSF!$B$6="*",{Area}{r}=CALC_WSF!$B$6),'
+                                      'OR(CALC_WSF!$B$7="*",{Zone}{r}=CALC_WSF!$B$7)),ROW(),"")', width=10),
+        ]),
     "MIDWEEK": TableSpec("DATA_MIDWEEK", "tblMidweek",
                          attendance_cols([Column("Area", "area", width=18), Column("Zone", "zone", width=24)]) + AUDIT),
     "CHOP": TableSpec("DATA_CHOP", "tblCHOP",
                       attendance_cols([Column("Area", "area", width=18), Column("Zone", "zone", width=24)]) + AUDIT),
     "COMMUNITY": TableSpec("DATA_COMMUNITY", "tblCommunity",
                            attendance_cols([Column("Church", "church", width=12),
-                                            Column("Service_Type", "service_type", width=12)])
+                                            Column("Service_Type", "service_type", width=12),
+                                            # Area and name come from MASTER_COMMUNITY (Church_ID = zincode)
+                                            Column("Area", formula='=IF({Church}{r}="","",IFERROR(INDEX('
+                                                   'MASTER_COMMUNITY!$C:$C,MATCH({Church}{r},MASTER_COMMUNITY!$A:$A,'
+                                                   '0))&"",""))', width=16),
+                                            Column("Church_Name", formula='=IF({Church}{r}="","",IFERROR(INDEX('
+                                                   'MASTER_COMMUNITY!$B:$B,MATCH({Church}{r},MASTER_COMMUNITY!$A:$A,'
+                                                   '0))&"",{Church}{r}))', width=30)])
                            + [Column("Pastors_Present", "pastors_present", fmt=FMT_INT0, width=9, kind="int")]
                            + AUDIT),
     "SERVICE_AREAS": TableSpec("DATA_SERVICE_AREAS", "tblServiceAreas", [

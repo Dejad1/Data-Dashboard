@@ -443,3 +443,33 @@ def test_sunday_workbook_rules(tmp_path):
     kinds = {i["issue"] for i in issues}
     assert {"Church code corrected to its Area", "Block outside the sheet's month skipped"} <= kinds
     assert "offering" not in rows.columns
+
+
+@pytest.mark.skipif(not (HAS_LO and list(SAMPLES.glob("*MID-WEEK_SERVICE*"))), reason="real sample files not present")
+def test_real_service_dashboards(tmp_path):
+    """The reporting-system exports and Community Sunday workbook, end to end through the dashboards."""
+    root = tmp_path / "svc"
+    (root / "masters").mkdir(parents=True)
+    for f in ("MASTER_AREAS.csv", "MASTER_ZONES.csv", "MASTER_COMMUNITY.csv"):
+        shutil.copy(HERE.parent / "masters" / f, root / "masters" / f)
+    (root / "inbox").mkdir()
+    for pattern in ("*CELL_SERVICE*", "*MID-WEEK_SERVICE*", "*ALL_CHOP*", "*COMMUNITY_CHURCH_SUNDAY*"):
+        for f in list(SAMPLES.glob(pattern))[:1]:
+            shutil.copy(f, root / "inbox" / f.name)
+    ingest.run(root, build=True, quiet=True)
+    out = root / "Operations_Dashboard.xlsx"
+    recalc(out)
+    assert scan(out)["total_errors"] == 0
+    wb = load_workbook(out, data_only=True)
+    mw, ch, cc, ws_ = wb["CALC_MIDWEEK"], wb["CALC_CHOP"], wb["CALC_COMMUNITY"], wb["CALC_WSF"]
+    # Midweek: zonal attendance without the 35 Community Churches
+    assert mw["B90"].value == 53529
+    assert (mw["B97"].value, mw["B98"].value) == (1271 - 35, 1033 - 27)
+    # CHOP: Area-level CHOP included; CHOP zones without the Community Churches' CHOP zones
+    assert ch["B90"].value == 5869
+    assert ch["B98"].value == 437 - 5
+    # Community Sunday, 27 Sept 2026 (17 churches so far) and 20 Sept
+    assert (cc["B90"].value, cc["C90"].value) == (4664, 8830)
+    assert cc["B99"].value == 17
+    # WSF cell service (week ending 20 Sept): cells by zone
+    assert ws_["B90"].value == 86682 and ws_["B96"].value == 14678
