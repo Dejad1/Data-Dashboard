@@ -45,10 +45,11 @@ CREATE TABLE IF NOT EXISTS transport_runs (
     week_ending TEXT, report_date TEXT, report TEXT, category TEXT, vehicle_type TEXT, area TEXT, zone_code TEXT,
     location TEXT, vehicle_id TEXT, buses INTEGER, capacity REAL, trips INTEGER,
     male INTEGER, female INTEGER, children INTEGER, cost REAL, paid_by TEXT, status TEXT, service TEXT,
-    remarks_category TEXT, remarks TEXT, in_church TEXT, source_row INTEGER,
+    remarks_category TEXT, remarks TEXT, in_church TEXT, location_type TEXT, source_row INTEGER,
     source_file TEXT, loaded_on TEXT);
 CREATE TABLE IF NOT EXISTS transport_costs (
-    week_ending TEXT, report_date TEXT, report TEXT, category TEXT, area TEXT, vehicle_id TEXT, cost_type TEXT,
+    week_ending TEXT, report_date TEXT, report TEXT, category TEXT, area TEXT, vehicle_id TEXT, vehicle_reg TEXT,
+    cost_type TEXT,
     hub_status TEXT, trips REAL, quantity REAL, unit_price REAL, amount REAL, payable TEXT, paid_by TEXT,
     source_row INTEGER, source_file TEXT, loaded_on TEXT);
 CREATE TABLE IF NOT EXISTS transport_budget (
@@ -88,6 +89,17 @@ class Databank:
         self.path = Path(path)
         self.con = sqlite3.connect(self.path)
         self.con.executescript(SCHEMA)
+        self._migrate()
+
+    # columns added after a databank was first created: (table, column)
+    ADDED_COLUMNS = [("transport_runs", "location_type"), ("transport_costs", "vehicle_reg")]
+
+    def _migrate(self) -> None:
+        for table, column in self.ADDED_COLUMNS:
+            have = {r[1] for r in self.con.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                self.con.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        self.con.commit()
 
     def close(self) -> None:
         self.con.commit()

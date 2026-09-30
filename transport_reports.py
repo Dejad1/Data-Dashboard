@@ -143,8 +143,9 @@ class Cols:
 
 RUN_COLS = ["week_ending", "report_date", "report", "category", "vehicle_type", "area", "zone_code", "location",
             "vehicle_id", "buses", "capacity", "trips", "male", "female", "children", "cost", "paid_by",
-            "status", "service", "remarks_category", "remarks", "in_church", "source_row"]
-COST_COLS = ["week_ending", "report_date", "report", "category", "area", "vehicle_id", "cost_type", "hub_status",
+            "status", "service", "remarks_category", "remarks", "in_church", "location_type", "source_row"]
+COST_COLS = ["week_ending", "report_date", "report", "category", "area", "vehicle_id", "vehicle_reg", "cost_type",
+             "hub_status",
              "trips", "quantity", "unit_price", "amount", "payable", "paid_by", "source_row"]
 BUDGET_COLS = ["week_ending", "report_date", "report", "area_no", "area", "buses_allocated", "cost_per_bus",
                "expected_spend", "payable_this_week", "source_row"]
@@ -222,7 +223,6 @@ def read_ft_procured(raw, hdr, match, settings, when) -> Parsed:
         name = row[ci["area"]]
         if blank(name) and blank(row[ci["area_no"]]):
             if any(num(row[k]) for k in (ci["a_buses"], ci["a_cost"], ci["sighted"]) if k is not None):
-                p.checks.append(("File grand total: buses", num(row[ci["a_buses"]]), None))
                 p.checks.append(("File grand total: cost", num(row[ci["sighted"]]), None))
             continue
         area = match(name, row[ci["area_no"]])
@@ -269,21 +269,19 @@ def read_ft_procured(raw, hdr, match, settings, when) -> Parsed:
             vtype = "LT 22-seater"
         p.rows.append([None, when, p.layout, "FT Procured", vtype, area, z, row[ci["addr"]] if not blank(row[ci["addr"]]) else "",
                        "", 1, cap, 1, male, female, children, cost or 0, "Central", status, "",
-                       "", "" if blank(row[ci["remarks"]]) else str(row[ci["remarks"]]), in_church, excel_row])
+                       "", "" if blank(row[ci["remarks"]]) else str(row[ci["remarks"]]), in_church, "Loading Bay",
+                       excel_row])
     # cross-check against each Area's own total row
     df = p.frame(RUN_COLS)
     for area, (buses, cost, riders, r) in area_totals.items():
         got = df[df.area == area]
-        in_ch = int((got.in_church == "Y").sum())
         got_riders = int((got.male + got.female + got.children).sum())
-        if int(buses) != in_ch or abs(cost - got.cost.sum()) > 0.5 or int(riders) != got_riders:
+        if abs(cost - got.cost.sum()) > 0.5 or int(riders) != got_riders:
             p.issue("Warning", "Area total differs from its bus rows",
-                    f"{area}: Area row says {int(buses)} buses in church / ₦{cost:,.0f} / {int(riders)} riders; "
-                    f"bus rows give {in_ch} / ₦{got.cost.sum():,.0f} / {got_riders}", r)
-    for k, (label, file_v, _) in enumerate(p.checks):
-        loaded = int((df.in_church == "Y").sum()) if "buses" in label else df.cost.sum()
-        p.checks[k] = (label.replace("buses", "buses marked in church"), file_v, loaded)
-    p.checks.append(("Bus rows (all hired buses)", None, len(df)))
+                    f"{area}: Area row says ₦{cost:,.0f} / {int(riders)} riders; bus rows give "
+                    f"₦{got.cost.sum():,.0f} / {got_riders}", r)
+    p.checks = [(label, file_v, df.cost.sum()) for label, file_v, _ in p.checks]
+    p.checks.append(("Hired buses (every bus row)", None, len(df)))
     return p
 
 
@@ -323,7 +321,7 @@ def read_coaster_report(raw, hdr, match, settings, when) -> Parsed:
         p.rows.append([None, when, p.layout, category, vtype, area, None, "" if blank(row[ci["hub"]]) else str(row[ci["hub"]]),
                        vehicle_key(tag), 1, cap, int(trips), male, female, children, 0, "Central", status,
                        "" if blank(row[ci["service"]]) else str(row[ci["service"]]), rcat,
-                       "" if blank(row[ci["rdet"]]) else str(row[ci["rdet"]]), "", excel_row])
+                       "" if blank(row[ci["rdet"]]) else str(row[ci["rdet"]]), "", "Hub", excel_row])
     df = p.frame(RUN_COLS)
     p.checks.append(("Coasters listed", None, len(df)))
     p.checks.append(("Riders", None, int((df.male + df.female + df.children).sum())))
@@ -358,7 +356,7 @@ def read_ev_tata_report(raw, hdr, match, settings, when) -> Parsed:
         p.rows.append([None, when, p.layout, "EV/TATA", vtype, area, None, "" if blank(row[loc_col]) else str(row[loc_col]),
                        "", 1, cap, 1 if riders else 0, male, female, children, 0, "Central",
                        "Ran" if riders else "Not run / no report",
-                       "" if blank(row[ci["service"]]) else str(row[ci["service"]]), "", remarks, "", excel_row])
+                       "" if blank(row[ci["service"]]) else str(row[ci["service"]]), "", remarks, "", "Hub", excel_row])
     return p
 
 
@@ -410,7 +408,8 @@ def read_wsf_procured(raw, hdr, match, settings, when) -> Parsed:
         z = zone_code(row[zcol]) if zcol is not None else None
         p.rows.append([None, when, p.layout, "WSF Procured", "Hired by zone", area, z, "", "", int(buses), cap, 1,
                        male, female, children, num(row[ci["cost"]]) or 0, "Members", "Ran", "", "",
-                       "" if ci["rem"] is None or blank(row[ci["rem"]]) else str(row[ci["rem"]]), "", excel_row])
+                       "" if ci["rem"] is None or blank(row[ci["rem"]]) else str(row[ci["rem"]]), "", "Loading Bay",
+                       excel_row])
     df = p.frame(RUN_COLS)
     loaded = {"buses": df.buses.sum(), "riders": int((df.male + df.female + df.children).sum()),
               "cost": df.cost.sum()}
@@ -467,7 +466,7 @@ def read_coaster_fuel(raw, hdr, match, settings, when) -> Parsed:
             p.issue("Warning", "Pump price differs from the rest of the sheet",
                     f"₦{price:,.0f}/L instead of ₦{usual:,.0f}/L: ₦{litres * (price - usual):,.0f} extra", excel_row)
         vid = vehicle_key(row[ci["serial"]]) or vehicle_key(row[ci["reg"]])
-        p.rows.append([None, when, p.layout, "Church Coaster", area, vid, "Fuel", status, num(row[ci["trips"]]) or 0,
+        p.rows.append([None, when, p.layout, "Church Coaster", area, vid, vehicle_key(row[ci["reg"]]), "Fuel", status, num(row[ci["trips"]]) or 0,
                        litres, price, amount, "Y" if status == "HUB" and amount else "N", "Central", excel_row])
     df = p.frame(COST_COLS)
     p.checks.append(("Fuel payable, HUB coasters only", None, df.loc[df.payable == "Y", "amount"].sum()))
@@ -495,6 +494,15 @@ def read(raw: pd.DataFrame, sheet: str, file_name: str, masters: Masters, settin
     layout, hdr = detect(raw)
     if layout is None:
         return None
+    if layout == "REF_HUB_SUMMARY":
+        p = Parsed(layout, None, None, date_in_text(sheet, file_name))
+        for r in range(hdr + 1, len(raw)):
+            row = raw.iloc[r].tolist()
+            if any("grandtotal" in hkey(v) for v in row if not blank(v)):
+                nums = [num(v) for v in row if num(v) is not None]
+                if nums:
+                    p.checks.append(("Hub Payment Summary grand total", nums[-1], None))
+        return p
     if layout not in LOADED_LAYOUTS:
         return Parsed(layout, None, None, None)
     title_cells = [v for r in range(hdr + 1) for v in raw.iloc[r].tolist() if not blank(v)]

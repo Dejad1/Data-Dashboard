@@ -157,9 +157,13 @@ def test_real_transport_samples_27_sept(tmp_path):
     # WSF Procured matches the sheet's own riders and cost totals
     assert q("SELECT SUM(male+female+children), SUM(cost) FROM transport_runs WHERE category='WSF Procured'") == (
         9775, 19670000.0)
-    # FT Procured: 859 buses marked in church; cost is the sheet's ₦54,267,500 plus Ikoyi's text '170-,000'
-    assert q("SELECT SUM(in_church='Y'), SUM(cost) FROM transport_runs WHERE category='FT Procured'") == (
-        859, 54437500.0)
+    # FT Procured: every bus row is a bus (a blank "in church" cell is only a missing loading-bay entry);
+    # cost is the sheet's ₦54,267,500 plus Ikoyi's text '170-,000'
+    assert q("SELECT COUNT(*), SUM(cost) FROM transport_runs WHERE category='FT Procured'") == (1019, 54437500.0)
+    # coasters marked ZONE on the fuel schedule load at loading bays; TATA/EV at hubs
+    assert q("SELECT COUNT(*) FROM transport_runs WHERE category='Church Coaster' AND location_type='Loading Bay'") == (46,)
+    assert q("SELECT COUNT(*) FROM transport_runs WHERE report='EV_TATA_REPORT' AND location_type<>'Hub'") == (0,)
+    assert q("SELECT severity FROM dq_log WHERE issue LIKE 'Hub Payment Summary%'") == ("Info",)
     # coaster fuel actually paid (HUB coasters) = ₦7,574,800
     assert q("SELECT SUM(amount) FROM transport_costs WHERE payable='Y'") == (7574800.0,)
     assert q("SELECT COUNT(*) FROM transport_budget") == (92,)
@@ -301,17 +305,21 @@ def test_transport_dashboard(root, tmp_path, scope):
     ran = r.loc[r.status == "Ran", "buses"].sum()
     seats_rows = r[(r.status == "Ran") & r.capacity.notna() & (r.capacity > 0)]
     seats = (seats_rows.capacity * seats_rows.trips.clip(lower=1)).sum()
-    util = (seats_rows.male + seats_rows.female + seats_rows.children).sum() / seats
+    seat_cap = seats_rows.capacity * seats_rows.trips.clip(lower=1)
+    riders_on = seats_rows.male + seats_rows.female + seats_rows.children
+    util = riders_on.clip(upper=seat_cap).sum() / seats          # a full bus counts as 100%
+    excess = (riders_on - seat_cap).clip(lower=0).sum()
     ft_budget = (b.buses_allocated * b.cost_per_bus).sum()
     ft_cost = r.loc[r.category == "FT Procured", "cost"].sum()
     got = {k: c[f"B{90 + i}"].value for i, k in enumerate(
-        ["riders", "ran", "listed", "pct_ran", "seats", "util", "spend", "central", "members", "fuel", "cpr", "cpb",
+        ["riders", "ran", "listed", "pct_ran", "seats", "util", "excess", "spend", "central", "members", "fuel", "cpr", "cpb",
          "cps", "ft_vs_budget", "breakdowns"])}
     assert got["riders"] == riders
     assert got["ran"] == ran
     assert abs(got["spend"] - spend) < 0.01
     assert abs(got["seats"] - seats) < 0.01
     assert abs(got["util"] - util) < 1e-9
+    assert abs(got["excess"] - excess) < 1e-9
     assert abs(got["ft_vs_budget"] - ft_cost / ft_budget) < 1e-9
     assert got["breakdowns"] == int((r.status == "Breakdown").sum())
 

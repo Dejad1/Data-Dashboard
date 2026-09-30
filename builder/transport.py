@@ -28,13 +28,14 @@ CAT0 = 110            # category table rows
 AREA0 = 3             # per-Area block (columns AE onwards)
 NOTES = 40            # rows in the operational notes list
 CATEGORIES = ["FT Procured", "Church Coaster", "EV/TATA", "WSF Procured"]
+LOCATIONS = ["Hub", "Loading Bay"]      # TATA/EV/coasters load at Hubs; FT & WSF Procured at Loading Bays
 FMT_NGN_INT = '"₦"#,##0'
 FMT_NGN_DEC = '"₦"#,##0.00'
 
 # series columns: key -> (letter, header)
 SER = {}
 _order = ["k", "week", "month", "qtr", "year", "rows", "riders", "male", "female", "children", "listed", "ran",
-          "seats", "rws", "hire", "fuel", "spend", "central", "members", "ft_budget", "ft_cost", "breakdowns",
+          "seats", "rws", "excess", "hire", "fuel", "spend", "central", "members", "ft_budget", "ft_cost", "breakdowns",
           "util", "has", "win", "mtd", "qtd", "ytd"]
 for _i, _k in enumerate(_order):
     from openpyxl.utils import get_column_letter as _gcl
@@ -47,6 +48,7 @@ KPIS = [
     ("% buses that ran", "ratio", ("ran", "listed"), FMT_PCT),
     ("Seats offered", "add", "seats", FMT_INT),
     ("Seat utilisation %", "ratio", ("rws", "seats"), FMT_PCT),
+    ("Riders beyond seats (unmet demand)", "add", "excess", FMT_INT),
     ("Total spend", "add", "spend", FMT_NGN_INT),
     ("Central spend (FT hire + coaster fuel)", "add", "central", FMT_NGN_INT),
     ("Member-paid (WSF Procured)", "add", "members", FMT_NGN_INT),
@@ -113,7 +115,8 @@ def build_calc(wb, n_areas: int):
             "riders": tsum("Grand_Total"), "male": tsum("Male"), "female": tsum("Female"),
             "children": tsum("Children"), "listed": tsum("Buses"),
             "ran": tsum("Buses", f',{T.ref("Status")},"Ran"'),
-            "seats": tsum("Seats_Offered"), "rws": tsum("Riders_With_Seats"), "hire": tsum("Cost"),
+            "seats": tsum("Seats_Offered"), "rws": tsum("Riders_Seated"), "excess": tsum("Excess_Riders"),
+            "hire": tsum("Cost"),
             "fuel": f'=IF(OR({wk}="",$B$17),0,SUMIFS({CO.ref("Paid_Amount")},{ccrit(wk)}))',
             "spend": f"={S['hire']}+{S['fuel']}",
             "central": f"={S['fuel']}+" + tsum("Cost", f',{T.ref("Paid_By")},"Central"')[1:],
@@ -166,13 +169,17 @@ def build_calc(wb, n_areas: int):
             ws[f"{col}{r}"] = v
 
     # ---- by category, selected week (row CAT0 ...) ------------------------------------
-    heads = ["Category", "Listed", "Ran", "% ran", "Riders", "Seats", "Riders w/ seats", "Utilisation", "Hire cost",
-             "Fuel paid", "Spend", "Cost/rider", "Cost/bus", "Cost/seat", "Riders prev wk", "Riders WoW", "Paid by"]
+    heads = ["Category", "Listed", "Ran", "% ran", "Riders", "Seats", "Riders seated", "Utilisation", "Hire cost",
+             "Fuel paid", "Spend", "Cost/rider", "Cost/bus", "Cost/seat", "Riders prev wk", "Riders WoW", "Paid by",
+             "Excess riders"]
     for j, h in enumerate(heads):
         ws.cell(CAT0 - 1, j + 1, h)
-    for i, cat in enumerate(CATEGORIES + ["All categories"]):
+    for i, cat in enumerate(CATEGORIES + ["All categories"] + LOCATIONS):
         r = CAT0 + i
-        cc = f',{T.ref("Category")},"{cat}"' if cat != "All categories" else ""
+        if cat in LOCATIONS:
+            cc = f',{T.ref("Location_Type")},"{cat}"'
+        else:
+            cc = f',{T.ref("Category")},"{cat}"' if cat != "All categories" else ""
         base = f"{tcrit('$B$10')}{cc}"
         prev = f"{tcrit('$B$10-7')}{cc}"
         ws[f"A{r}"] = cat
@@ -181,11 +188,16 @@ def build_calc(wb, n_areas: int):
         ws[f"D{r}"] = f'=IF(B{r}=0,"",C{r}/B{r})'
         ws[f"E{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Grand_Total')},{base}))"
         ws[f"F{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Seats_Offered')},{base}))"
-        ws[f"G{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Riders_With_Seats')},{base}))"
+        ws[f"G{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Riders_Seated')},{base}))"
+        ws[f"R{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Excess_Riders')},{base}))"
         ws[f"H{r}"] = f'=IF(F{r}=0,"",G{r}/F{r})'
         ws[f"I{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Cost')},{base}))"
         if cat in ("Church Coaster", "All categories"):
             ws[f"J{r}"] = f"=IF(OR($B$10=0,$B$17),0,SUMIFS({CO.ref('Paid_Amount')},{ccrit('$B$10')}))"
+        elif cat in LOCATIONS:
+            status = "HUB" if cat == "Hub" else "ZONE"
+            ws[f"J{r}"] = (f'=IF(OR($B$10=0,$B$17),0,SUMIFS({CO.ref("Paid_Amount")},{ccrit("$B$10")},'
+                           f'{CO.ref("Hub_Status")},"{status}"))')
         else:
             ws[f"J{r}"] = 0
         ws[f"K{r}"] = f"=I{r}+J{r}"
@@ -195,7 +207,8 @@ def build_calc(wb, n_areas: int):
         ws[f"O{r}"] = f"=IF($B$10=0,0,SUMIFS({T.ref('Grand_Total')},{prev}))"
         ws[f"P{r}"] = f'=IF(O{r}=0,"",E{r}/O{r}-1)'
         ws[f"Q{r}"] = {"FT Procured": "Central (hire)", "Church Coaster": "Central (fuel)",
-                       "EV/TATA": "Central (direct)", "WSF Procured": "Members"}.get(cat, "")
+                       "EV/TATA": "Central (no cost)", "WSF Procured": "Members",
+                       "Hub": "Mixed", "Loading Bay": "Mixed"}.get(cat, "")
 
     # ---- chart feeds: 13 weeks oldest -> newest ------------------------------------------
     ws["A125"] = "Week"
@@ -217,10 +230,11 @@ def build_calc(wb, n_areas: int):
         ws[f"K{r}"] = f"={SER['util']}{src}"
 
     # ---- per-Area block (columns AE..) ------------------------------------------------------
-    heads = ["Area", "Riders", "Buses ran", "Seats", "Riders w/ seats", "Utilisation", "Spend", "Cost/rider",
+    heads = ["Area", "Riders", "Buses ran", "Seats", "Riders seated", "Excess riders", "Utilisation", "Spend",
+             "Cost/rider",
              "FT cost", "FT budget", "FT over budget", "FT buses in church", "Buses allocated", "Breakdowns",
              "Util wk-1", "Util wk-2", "Util wk-3", "Weeks under UtilLow", "Flag", "Score util", "Score cpr",
-             "Score over", "Score riders", "Flag row"]
+             "Score over", "Score riders", "Flag row", "Score excess"]
     c0 = 31                                                  # column AE
     from openpyxl.utils import get_column_letter as L_
     A = {h: L_(c0 + j) for j, h in enumerate(heads)}
@@ -236,8 +250,9 @@ def build_calc(wb, n_areas: int):
         ws[f"{A['Riders']}{r}"] = "=" + g("Grand_Total")
         ws[f"{A['Buses ran']}{r}"] = "=" + g("Buses", extra=f',{T.ref("Status")},"Ran"')
         ws[f"{A['Seats']}{r}"] = "=" + g("Seats_Offered")
-        ws[f"{A['Riders w/ seats']}{r}"] = "=" + g("Riders_With_Seats")
-        ws[f"{A['Utilisation']}{r}"] = f'=IF({A["Seats"]}{r}=0,"",{A["Riders w/ seats"]}{r}/{A["Seats"]}{r})'
+        ws[f"{A['Riders seated']}{r}"] = "=" + g("Riders_Seated")
+        ws[f"{A['Excess riders']}{r}"] = "=" + g("Excess_Riders")
+        ws[f"{A['Utilisation']}{r}"] = f'=IF({A["Seats"]}{r}=0,"",{A["Riders seated"]}{r}/{A["Seats"]}{r})'
         ws[f"{A['Spend']}{r}"] = ("=" + g("Cost") + f'+IF(OR({a}="",$B$10=0),0,SUMIFS({CO.ref("Paid_Amount")},'
                                                      f'{CO.ref("Week_Ending")},$B$10,{CO.ref("Area")},{a}))')
         ws[f"{A['Cost/rider']}{r}"] = f'=IF(OR({A["Riders"]}{r}=0,{A["Spend"]}{r}=0),"",{A["Spend"]}{r}/{A["Riders"]}{r})'
@@ -254,15 +269,15 @@ def build_calc(wb, n_areas: int):
         for j, h in ((1, "Util wk-1"), (2, "Util wk-2"), (3, "Util wk-3")):
             wk = f"$B$10-{7 * j}"
             seats = g("Seats_Offered", wk)
-            ws[f"{A[h]}{r}"] = f'=IF({seats}=0,"",{g("Riders_With_Seats", wk)}/{seats})'
+            ws[f"{A[h]}{r}"] = f'=IF({seats}=0,"",{g("Riders_Seated", wk)}/{seats})'
         util_cells = [f"{A[h]}{r}" for h in ("Utilisation", "Util wk-1", "Util wk-2", "Util wk-3")]
         ws[f"{A['Weeks under UtilLow']}{r}"] = "=" + "+".join(
             f'IF(AND(ISNUMBER({c}),{c}<UtilLow),1,0)' for c in util_cells)
         ws[f"{A['Flag']}{r}"] = (
             f'=IF({A["Weeks under UtilLow"]}{r}>=UtilLowWeeks,{a}&": seats only "&TEXT({A["Utilisation"]}{r},"0%")'
             f'&" full, under "&TEXT(UtilLow,"0%")&" for "&{A["Weeks under UtilLow"]}{r}&" weeks running",'
-            f'IF(AND(ISNUMBER({A["Utilisation"]}{r}),{A["Utilisation"]}{r}>UtilHigh),{a}&": demand exceeds seats ("'
-            f'&TEXT({A["Utilisation"]}{r},"0%")&" full) — consider more buses",'
+            f'IF(AND({A["Seats"]}{r}>0,{A["Excess riders"]}{r}>={A["Seats"]}{r}*ExcessShare),{a}&": "'
+            f'&TEXT({A["Excess riders"]}{r},"#,##0")&" riders beyond the seats — consider more buses",'
             f'IF(AND(ISNUMBER({A["FT over budget"]}{r}),{A["FT over budget"]}{r}>0),{a}&": FT spend ₦"'
             f'&TEXT({A["FT over budget"]}{r},"#,##0")&" over the weekly budget",'
             f'IF({A["Breakdowns"]}{r}>0,{a}&": "&{A["Breakdowns"]}{r}&" coaster breakdown(s) this week",""))))')
@@ -272,10 +287,11 @@ def build_calc(wb, n_areas: int):
                                        f'{A["FT over budget"]}{r}+ROW()/1000000,"")')
         ws[f"{A['Score riders']}{r}"] = f'=IF({A["Riders"]}{r}>0,{A["Riders"]}{r}+ROW()/1000000,"")'
         ws[f"{A['Flag row']}{r}"] = f'=IF({A["Flag"]}{r}="","",ROW())'
+        ws[f"{A['Score excess']}{r}"] = (f'=IF({A["Excess riders"]}{r}>0,{A["Excess riders"]}{r}+ROW()/1000000,"")')
     ar = lambda h: f"${A[h]}${AREA0}:${A[h]}${last}"
 
     # ---- Top 10 lists (columns BC..) ------------------------------------------------------------
-    lists = [("demand", "LARGE", "Score util", "Utilisation"), ("low", "SMALL", "Score util", "Utilisation"),
+    lists = [("demand", "LARGE", "Score excess", "Excess riders"), ("low", "SMALL", "Score util", "Utilisation"),
              ("cpr", "LARGE", "Score cpr", "Cost/rider"), ("over", "LARGE", "Score over", "FT over budget"),
              ("riders", "LARGE", "Score riders", "Riders")]
     TOP = {}
@@ -393,39 +409,47 @@ def build_dashboard(wb, n_zones: int, top: dict):
              ("F", None, "% ran", "D", FMT_PCT), ("G", None, "Riders", "E", FMT_INT), ("H", None, "Seats", "F", FMT_INT),
              ("I", None, "Utilisation", "H", FMT_PCT), ("J", None, "Spend", "K", FMT_NGN_INT),
              ("K", None, "Cost / rider", "L", FMT_NGN_DEC), ("L", None, "Cost / bus", "M", FMT_NGN_INT),
-             ("M", None, "Cost / seat", "N", FMT_NGN_DEC), ("N", None, "Riders WoW", "P", FMT_PCT_SIGNED),
+             ("M", None, "Riders beyond seats", "R", FMT_INT), ("N", None, "Riders WoW", "P", FMT_PCT_SIGNED),
              ("O", None, "Paid by", "Q", None)]
     for c1, c2, h, _, _ in heads:
         put(ws, f"{c1}13", h, f=font(9, True, WHITE), bg=colour, align=CENTER, merge_to=f"{c2}13" if c2 else None)
     ws.row_dimensions[13].height = 26
-    for i in range(len(CATEGORIES) + 1):
+    n_rows = len(CATEGORIES) + 1 + len(LOCATIONS)
+    location_names = {"Hub": "Hubs (TATA/EV/coasters)", "Loading Bay": "Loading Bays (FT/WSF, zone coasters)"}
+    for i in range(n_rows):
         r, cr = 14 + i, CAT0 + i
         total = i == len(CATEGORIES)
-        band = tint(colour, 0.93) if total else None
+        loc = i > len(CATEGORIES)
+        band = tint(colour, 0.93) if total else (tint(colour, 0.97) if loc else None)
         for c1, c2, _, src, fmt in heads:
-            cell = put(ws, f"{c1}{r}", dash_value(C(f"${src}${cr}")) if fmt else f"={C(f'${src}${cr}')}",
-                       f=font(9, total), bg=band, fmt=fmt, align=RIGHT if fmt else LEFT,
-                       merge_to=f"{c2}{r}" if c2 else None)
-            cell.border = Border(bottom=side())
-    rag_rules(ws, "I14:I18", "I14")
-    signed_rules(ws, "N14:N18", "N14")
+            if loc and src == "A":
+                value = location_names[LOCATIONS[i - len(CATEGORIES) - 1]]
+            else:
+                value = dash_value(C(f"${src}${cr}")) if fmt else f"={C(f'${src}${cr}')}"
+            cell = put(ws, f"{c1}{r}", value, f=font(9, total, INK, italic=loc), bg=band, fmt=fmt,
+                       align=RIGHT if fmt else LEFT, merge_to=f"{c2}{r}" if c2 else None)
+            cell.border = Border(bottom=side(), top=side(colour) if i == len(CATEGORIES) + 1 else None)
+    last_cat = 14 + n_rows - 1
+    rag_rules(ws, f"I14:I{last_cat}", "I14")
+    signed_rules(ws, f"N14:N{last_cat}", "N14")
     ws.conditional_formatting.add("K14:K17", DataBarRule(start_type="num", start_value=0, end_type="max",
                                                          color=tint(colour, 0.35)))
 
     # ---- time analysis --------------------------------------------------------------------------------
-    section_title(ws, 20, "Time analysis — selected week against previous week, the N-week average and "
+    ta = last_cat + 2
+    section_title(ws, ta, "Time analysis — selected week against previous week, the N-week average and "
                           "period-to-date", colour, last="O")
-    put(ws, "B21", "KPI", f=font(9, True, WHITE), bg=colour, align=LEFT, merge_to="C21")
+    put(ws, f"B{ta + 1}", "KPI", f=font(9, True, WHITE), bg=colour, align=LEFT, merge_to=f"C{ta + 1}")
     for j, h in enumerate(MEASURES):
-        cell = ws.cell(21, 4 + j)
+        cell = ws.cell(ta + 1, 4 + j)
         cell.value = (f'="Avg last "&{C("$B$11")}&" wks"' if h == "Avg last N wks" else
                       f'="vs "&{C("$B$11")}&"-wk avg"' if h == "vs N-wk avg" else h)
         cell.font, cell.fill, cell.alignment = font(9, True, WHITE), fill(colour), CENTER
-    ws.row_dimensions[21].height = 28
+    ws.row_dimensions[ta + 1].height = 28
     for i, (label, kind, src, fmt) in enumerate(KPIS):
-        r, cr = 22 + i, KPI0 + i
+        r, cr = ta + 2 + i, KPI0 + i
         band = tint(colour, 0.95) if i % 2 == 0 else None
-        put(ws, f"B{r}", label, f=font(9, i in (0, 5, 6, 10)), align=LEFT, bg=band, merge_to=f"C{r}")
+        put(ws, f"B{r}", label, f=font(9, i in (0, 5, 7, 11)), align=LEFT, bg=band, merge_to=f"C{r}")
         for j, L in enumerate("BCDEFGHIJKLM"):
             cell = ws.cell(r, 4 + j)
             cell.value = dash_value(C(f"${L}${cr}"))
@@ -449,7 +473,7 @@ def build_dashboard(wb, n_zones: int, top: dict):
             signed_rules(ws, f"{colL}{r}", f"{colL}{r}")
         if label == "Seat utilisation %":
             rag_rules(ws, f"D{r}:E{r}", f"D{r}")
-    last_ta = 22 + len(KPIS)
+    last_ta = ta + 2 + len(KPIS)
     put(ws, f"B{last_ta}", "Averages use only weeks that have data. MTD/QTD/YTD run to the selected week; ratio rows "
                            "show the ratio of the period's totals.", f=font(8, False, MUTED, italic=True), align=LEFT,
         merge_to=f"O{last_ta}")
@@ -492,9 +516,9 @@ def build_dashboard(wb, n_zones: int, top: dict):
     # ---- optimisation panel ------------------------------------------------------------------------------
     op = ch_row + 17
     section_title(ws, op, "Optimisation — selected week, by Area", colour, last="O",
-                  note="Thresholds (UtilLow, UtilHigh, UtilLowWeeks) are on SETTINGS")
+                  note="Thresholds (UtilLow, UtilLowWeeks, ExcessShare) are on SETTINGS")
     zone_scope = f'{C("$B$3")}="Zone"'
-    tables = [("B", "Demand exceeds seats (fullest)", "demand", FMT_PCT),
+    tables = [("B", "Unmet demand (riders beyond seats)", "demand", FMT_INT),
               ("D", "Lowest utilisation", "low", FMT_PCT),
               ("F", "Highest cost per rider", "cpr", FMT_NGN_DEC),
               ("H", "FT spend over budget", "over", FMT_NGN_INT),

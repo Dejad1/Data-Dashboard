@@ -99,12 +99,16 @@ SPECS = {
         Column("Adult_Total", formula=ADULT_F, fmt=FMT_INT0, width=11),
         Column("Children", "children", fmt=FMT_INT0, width=9, kind="int"),
         Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11),
-        Column("Riders_With_Seats", formula='=IF({Seats_Offered}{r}="","",{Grand_Total}{r})', fmt=FMT_INT0,
-               width=11),
+        # a full bus counts as 100%: riders above the seats are "excess" (demand for more buses)
+        Column("Riders_Seated", formula='=IF({Seats_Offered}{r}="","",MIN({Grand_Total}{r},{Seats_Offered}{r}))',
+               fmt=FMT_INT0, width=11),
+        Column("Excess_Riders", formula='=IF({Seats_Offered}{r}="","",MAX(0,{Grand_Total}{r}-{Seats_Offered}{r}))',
+               fmt=FMT_INT0, width=11),
         Column("Cost", "cost", fmt=FMT_NGN, width=12, kind="num"),
         Column("Paid_By", "paid_by", width=10), Column("Status", "status", width=18),
         Column("Service", "service", width=18), Column("Remarks_Category", "remarks_category", width=16),
         Column("Remarks", "remarks", width=30), Column("In_Church", "in_church", width=9),
+        Column("Location_Type", "location_type", width=12),
         *AUDIT,
         # criteria key: blank zone codes (coasters, EV) become "-" so a "*" wildcard still matches them
         Column("Zone_Key", formula='=IF({Zone_Code}{r}="","-",{Zone_Code}{r})', width=9),
@@ -275,7 +279,8 @@ SETTINGS_ROWS = [
     ("RAG_Green", 0.90, FMT_PCT, "Reporting / utilisation at or above this is green.", True),
     ("RAG_Amber", 0.75, FMT_PCT, "At or above this (but below green) is amber; below it is red.", True),
     ("UtilLow", 0.50, FMT_PCT, "Transport: buses/routes under this utilisation are flagged (X in the spec).", True),
-    ("UtilHigh", 1.00, FMT_PCT, "Transport: utilisation above this means demand exceeds capacity.", True),
+    ("ExcessShare", 0.10, FMT_PCT, "Transport: flag an Area when riders beyond the seats reach this share of its "
+                                   "seats (a full bus counts as 100%; the extra riders show unmet demand).", True),
     ("UtilLowWeeks", 4, "0", "Transport: consecutive weeks under UtilLow before a plain-language flag is raised.", True),
     ("Cap_FT", 22, "0", "Seats per trip, FT Procured (LT) buses.", True),
     ("Cap_Coaster", 30, "0", "Seats per trip, church-owned Coasters (assumed 30; confirm).", True),

@@ -114,17 +114,22 @@ The TRANSPORT DASHBOARD reads four bus categories:
 |---|---|---|---|
 | FT Procured (hired LT, 22-seater; sometimes smaller or bigger when no LT was available) | FT PROCURED sheet, one row per bus | Central | "SIGHTED BUSES AMOUNT" per bus |
 | Church Coaster | FT COASTERS sheet, one row per coaster | Central pays fuel | Coaster fuelling schedule, **HUB coasters only** |
-| EV/TATA (70 seats; TATA park at Canaanland) | TATA EV REPORT sheet (and EV BRT rows on the coaster sheet) | Central, charged directly | No cost in the reports |
+| EV/TATA (70 seats; TATA park at Canaanland) | TATA EV REPORT sheet (and EV BRT rows on the coaster sheet) | Central, charged directly | None: no EV/TATA cost is reported |
+| Hiace (31 buses) | Weekly report from October 2026 | – | Reader to be added when the first report arrives |
 | WSF Procured | WSF PROCURED sheet, one row per zone | Members | COST column |
 
+**Where buses load.** TATA, EV and most coasters load at **Hubs**, the major express points where long buses can stop. FT Procured and WSF Procured load at **Loading Bays**, which can be down small streets. A coaster marked **ZONE** on the fuelling schedule also counts as a Loading Bay. The dashboard compares Hubs and Loading Bays side by side.
+
 Rules and checks:
-- **Utilisation** = riders ÷ seats offered, counting only buses whose capacity is known. Riders often exceed listed seats, especially with children.
+- **Utilisation** = riders seated ÷ seats offered, counting only buses whose capacity is known. A full bus counts as 100%.
+- **Riders beyond seats** = riders above a bus's seats, counted separately as unmet demand: the signal to add buses.
 - **FT budget** = buses allocated × approved cost per bus, from the allocation file.
-- **Cross-checks.** Each FT Area-total row and each sheet's grand total are compared with the rows under them. Differences go to DATA QUALITY, for example a total that skipped a number typed as text.
+- **FT bus count.** Every FT bus row counts as a bus. A blank "NUMBER OF BUSES IN CHURCH" only means the loading-bay line wasn't filled in.
+- **Cross-checks.** Each FT Area-total row, each sheet's grand total and the coaster **Hub Payment Summary** are compared with the rows they summarise. Differences go to DATA QUALITY, for example a total that skipped a number typed as text.
 - **Number clean-up.** Messy numbers such as `12$` and `170-,000` are cleaned and logged.
 - **Area boundary rows.** When a row carries the neighbouring Area's name, the zone code decides which Area it belongs to.
 - **Optimisation panel:**
-  - fullest Areas (demand exceeds seats);
+  - most riders beyond seats (unmet demand);
   - lowest utilisation;
   - highest cost per rider;
   - FT spend over budget;

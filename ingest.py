@@ -447,15 +447,40 @@ TRANSPORT_TABLES = {
 }
 
 
+def tag_coaster_locations(db: Databank, week: str) -> None:
+    """Coasters run from Hubs unless the fuel schedule marks the coaster ZONE (a loading bay)."""
+    db.execute("""
+        UPDATE transport_runs SET location_type = CASE WHEN EXISTS (
+            SELECT 1 FROM transport_costs c
+            WHERE c.week_ending = transport_runs.week_ending AND c.hub_status = 'ZONE'
+              AND transport_runs.vehicle_id <> ''
+              AND (c.vehicle_id = transport_runs.vehicle_id OR c.vehicle_reg = transport_runs.vehicle_id))
+            THEN 'Loading Bay' ELSE 'Hub' END
+        WHERE week_ending = ? AND category = 'Church Coaster'""", (week,))
+    db.con.commit()
+
+
 def load_transport_report(report, db: Databank, file_name: str, sheet: str, settings, loaded_on: str,
                           summary: dict) -> None:
     """Load one transport report sheet; a re-sent report replaces that week's rows for the category."""
     label = f"TRANSPORT {report.layout}"
     issues = [dict(i, logged_on=loaded_on, source_file=file_name, sheet=sheet, stream=label) for i in report.issues]
     if report.table is None:
-        db.log_issues([{"logged_on": loaded_on, "source_file": file_name, "sheet": sheet, "source_row": None,
-                        "stream": label, "severity": "Info", "issue": "Reference sheet, not loaded",
-                        "detail": "Recognised as a reference/summary sheet; nothing to load weekly"}])
+        note = {"logged_on": loaded_on, "source_file": file_name, "sheet": sheet, "source_row": None,
+                "stream": label, "severity": "Info", "issue": "Reference sheet, not loaded",
+                "detail": "Recognised as a reference/summary sheet; nothing to load weekly"}
+        if report.checks and report.report_date:
+            # Hub Payment Summary: compare with the HUB coaster fuel loaded from the schedule sheet
+            we = week_ending(report.report_date, settings["week_end_day"]).isoformat()
+            paid = db.execute("SELECT COALESCE(SUM(amount), 0) FROM transport_costs WHERE week_ending = ? "
+                              "AND payable = 'Y'", (we,))[0][0]
+            _, file_total, _ = report.checks[0]
+            same = abs(float(file_total) - float(paid)) <= 0.5
+            note.update(week_ending=we, severity="Info" if same else "Warning",
+                        issue="Hub Payment Summary agrees with the schedule" if same else
+                        "Hub Payment Summary differs from the schedule",
+                        detail=f"Summary says ₦{file_total:,.0f}; HUB coasters on the schedule add up to ₦{paid:,.0f}")
+        db.log_issues([note])
         return
     if report.report_date is None:
         db.log_issues(issues)
@@ -477,6 +502,8 @@ def load_transport_report(report, db: Databank, file_name: str, sheet: str, sett
                            "detail": f"{label_}: file says {file_total:,.0f}, rows add up to {loaded_total:,.0f}",
                            "week_ending": we})
     loaded, replaced = db.replace_report(report.table, df, keys)
+    if report.layout in ("COASTER_REPORT", "COASTER_FUEL"):
+        tag_coaster_locations(db, we)
     rejected = sum(1 for i in issues if i["severity"] == "Rejected")
     db.log_issues(issues)
     db.log_load(loaded_on=loaded_on, source_file=file_name, sheet=sheet, stream=label, rows_loaded=loaded,
