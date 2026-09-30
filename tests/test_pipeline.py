@@ -371,3 +371,75 @@ def test_zone_master_rules(tmp_path):
     m2 = Masters.load(tmp_path / "masters")
     assert m2.zone_for_address("9, Benja Road, Ota", "CANAANLAND 2") == "LFC0102"
     assert m2.zone_address["LFC8714"] == "JESAB ZONE"
+
+
+def _export(rows, zone_rows):
+    head = ["type", "areaCode", "areaName", "zoneCode", "zoneName", "ministerInCharge", "mobileNumber",
+            "totalZones", "zonesWithReport", "zonesWithoutReport", "totalCells", "cellsWithReport",
+            "cellsWithoutReport", "chopCount", "nonChopCount", "forChop", "communityCount", "nonCommunityCount",
+            "forCommunity", "totalMale", "totalFemale", "totalAdult", "totalholyghostBaptism", "totalChildren",
+            "total", "totalFirstTimer", "totalNewConvert", "totalTestimony"]
+    out = [head]
+    for r in rows + zone_rows:
+        out.append([r.get(h) for h in head])
+    return pd.DataFrame(out, dtype=object)
+
+
+def test_service_export_rules(tmp_path):
+    """Reporting-system export: zone codes, duplicates, community zones and Area-level remainder."""
+    import service_reports
+    from databank import Masters
+    (tmp_path / "masters").mkdir()
+    pd.DataFrame([{"Area_ID": "A04", "Area_Name": "OJU ORE", "Active": "Y", "Area_No": "4", "Aliases": ""}]) \
+        .to_csv(tmp_path / "masters" / "MASTER_AREAS.csv", index=False)
+    m = Masters.load(tmp_path / "masters")
+    area = {"type": "AreaSummary", "areaCode": "004", "areaName": "OJU ORE", "totalZones": 3, "zonesWithReport": 2,
+            "totalCells": 30, "cellsWithReport": 12, "chopCount": 1, "communityCount": 1,
+            "totalMale": 40, "totalFemale": 50, "totalChildren": 20, "total": 110}
+    z = lambda code, name, m_, f_, c_, cells, rep, chop=False, comm=False: {
+        "type": "ZoneSummary", "areaCode": "004", "areaName": "OJU ORE", "zoneCode": code, "zoneName": name,
+        "ministerInCharge": "SOMEONE", "mobileNumber": "234000", "totalCells": cells, "cellsWithReport": rep,
+        "forChop": chop, "forCommunity": comm, "totalMale": m_, "totalFemale": f_, "totalChildren": c_,
+        "total": m_ + f_ + c_, "totalFirstTimer": 1}
+    zones = [z("01", "ZONE ONE", 10, 12, 5, 10, 5, chop=True), z("01", "ZONE ONE AGAIN", 5, 5, 0, 10, 2),
+             z("02", "ZONE TWO", 0, 0, 0, 12, 0), z("12", "ILOGBO PALACE", 20, 25, 10, 8, 5, comm=True)]
+    res = service_reports.read_export(_export([area], zones), "MID-WEEK SERVICE",
+                                      "MID-WEEK_SERVICEArea_By_Area_Report_-2026-09-23-2026-09-23.xlsx", m)
+    assert res.stream == "MIDWEEK" and str(res.report_date) == "2026-09-23"
+    got = res.zones.set_index("zone")
+    assert got.loc["LFC0401", "male"] == 15 and got.loc["LFC0401", "cells_total"] == 10      # duplicate added once
+    assert "LFC0402" not in got.index                                                        # no report
+    assert "LFC0412" not in got.index and list(res.community.zone) == ["LFC0412"]            # community separated
+    assert got.loc["AREA LEVEL 04", "male"] == 40 - 35                                       # Area above its zones
+    assert "ministerInCharge" not in res.zones.columns and "mobileNumber" not in res.zones.columns
+    flags = res.flags.set_index("zone")
+    assert bool(flags.loc["LFC0401", "for_chop"]) and bool(flags.loc["LFC0412", "for_community"])
+
+
+def test_sunday_workbook_rules(tmp_path):
+    """Community Sunday sheet: one block per Sunday; old template blocks skipped; codes fixed by Area."""
+    import datetime as _dt
+    import service_reports
+    from databank import Masters
+    (tmp_path / "masters").mkdir()
+    pd.DataFrame([{"Area_ID": "A35", "Area_Name": "LUSADA", "Active": "Y", "Area_No": "35", "Aliases": ""}]) \
+        .to_csv(tmp_path / "masters" / "MASTER_AREAS.csv", index=False)
+    m = Masters.load(tmp_path / "masters")
+    block = ["MALE", "FEMALE", "CHILDREN", "ADULT TOTAL", "TOTAL", "FIRST TIMERS", "NEW CONVERT", "TESTIMONIES",
+             "OFFERING", "TITHE", "WAS PASTOR 1 PRESENT?", "WAS PASTOR 2 PRESENT?"]
+    top = ["COMMUNITY", None, None, None, None, _dt.datetime(2026, 9, 6)] + [None] * 11 + \
+          [_dt.datetime(2026, 9, 13)] + [None] * 11 + [_dt.datetime(2024, 6, 30)] + [None] * 11
+    head = ["S/N", "HOST AREA", "AREA NO", "COMMUNITY CHURCH LOCATION", "ZINCODE"] + block * 3
+    row = [1, "LUSADA", 35, "BJ WALEX, LUSADA", "LFC319",
+           10, 12, 8, 22, 30, 1, 0, 2, 5000, 100, "YES", "NIL",       # 6 Sep
+           None, None, None, None, None, None, None, None, None, None, None, None,  # 13 Sep: no report
+           99, 99, 99, 198, 297, 0, 0, 0, 0, 0, "YES", "YES"]         # 2024 template block
+    raw = pd.DataFrame([top, head, row], dtype=object)
+    rows, issues = service_reports.read_sunday(raw, "SEPTEMBER 2026", m)
+    assert len(rows) == 1
+    r = rows.iloc[0]
+    assert r.church == "LFC3519" and r.area == "LUSADA" and str(r.report_date) == "2026-09-06"
+    assert (r.male, r.female, r.children, r.pastors_present) == (10, 12, 8, 1)
+    kinds = {i["issue"] for i in issues}
+    assert {"Church code corrected to its Area", "Block outside the sheet's month skipped"} <= kinds
+    assert "offering" not in rows.columns

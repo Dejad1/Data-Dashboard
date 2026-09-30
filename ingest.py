@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+import service_reports
 import transport_reports
 import zone_master
 from config import ALIASES_FILE, COMMUNITY_SERVICE_TYPES, HERE, Paths, load_settings, week_ending
@@ -448,6 +449,97 @@ TRANSPORT_TABLES = {
 }
 
 
+SERVICE_TABLE = {"WSF": "wsf_zone", "MIDWEEK": "midweek", "CHOP": "chop"}
+SERVICE_TYPE = {"WSF": "WSF", "MIDWEEK": "Midweek", "CHOP": "CHOP"}
+
+
+def _replace_week(db: Databank, table: str, where: str, params: tuple, df: pd.DataFrame, key: str) -> tuple:
+    """Report-style load: this report replaces the same report for the same week."""
+    replaced = db.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params)[0][0]
+    db.execute(f"DELETE FROM {table} WHERE {where}", params)
+    db.con.commit()
+    loaded, _ = db.upsert(key, df) if key else (0, 0)
+    return loaded, replaced
+
+
+def load_service_export(res, db: Databank, m: Masters, file_name: str, sheet: str, settings, loaded_on: str,
+                        summary: dict) -> None:
+    """Load a reporting-system export (WSF cell service, Midweek, CHOP) for one week."""
+    label = res.stream
+    issues = [dict(i, logged_on=loaded_on, source_file=file_name, sheet=sheet, stream=label) for i in res.issues]
+    if res.report_date is None or res.zones is None:
+        db.log_issues(issues)
+        return
+    we = week_ending(res.report_date, settings["week_end_day"]).isoformat()
+    for i in issues:
+        i["week_ending"] = we
+    # refresh the zone master from the system's flags (new zones, CHOP zones, Community Churches)
+    master, flag_issues = zone_master.apply_export_flags(m.zones, res.flags, res.stream)
+    master.to_csv(m.folder / "MASTER_ZONES.csv", index=False)
+    summary["_masters_changed"] = True
+    issues += [dict(i, logged_on=loaded_on, source_file=file_name, sheet=sheet, stream="ZONE MASTER",
+                    week_ending=we, source_row=None) for i in flag_issues]
+    base = dict(week_ending=we, report_date=res.report_date.isoformat(), source_file=file_name, loaded_on=loaded_on)
+    z = res.zones.assign(**base)
+    table = SERVICE_TABLE[res.stream]
+    if res.stream == "WSF":
+        z["origin"] = "zone"
+        loaded, replaced = _replace_week(db, table, "week_ending = ?", (we,), z, "WSF_ZONE")
+    else:
+        loaded, replaced = _replace_week(db, table, "week_ending = ?", (we,), z, res.stream)
+    c = res.community.rename(columns={"zone": "church"}).assign(service_type=SERVICE_TYPE[res.stream], **base)
+    _replace_week(db, "community", "week_ending = ? AND service_type = ?", (we, SERVICE_TYPE[res.stream]), c,
+                  "COMMUNITY")
+    a = res.areas.assign(stream=res.stream, **base)
+    db.execute("DELETE FROM service_areas WHERE stream = ? AND week_ending = ?", (res.stream, we))
+    cols = ["stream", "week_ending", "report_date", "area", "area_no", "total_zones", "zones_with_report",
+            "chop_zones", "community_zones", "cells_total", "cells_reported", "male", "female", "children",
+            "source_file", "loaded_on"]
+    db.con.executemany(f"INSERT INTO service_areas ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                       a[cols].astype(object).values.tolist())
+    db.con.commit()
+    db.log_issues(issues)
+    rejected = sum(1 for i in issues if i["severity"] == "Rejected")
+    db.log_load(loaded_on=loaded_on, source_file=file_name, sheet=sheet, stream=label, rows_loaded=loaded,
+                rows_replaced=replaced, rows_rejected=rejected)
+    s = summary.setdefault(label, [0, 0, 0])
+    s[0] += loaded + len(c)
+    s[1] += replaced
+    s[2] += rejected
+
+
+def load_sunday(result, db: Databank, m: Masters, file_name: str, sheet: str, settings, loaded_on: str,
+                summary: dict) -> None:
+    """Community Church Sunday workbook sheet: every Sunday in it replaces that Sunday's rows."""
+    rows, issues = result
+    issues = [dict(i, logged_on=loaded_on, source_file=file_name, sheet=sheet, stream="COMMUNITY SUNDAY")
+              for i in issues]
+    if len(rows):
+        unknown = rows[rows.area.isna()]
+        for _, r in unknown.iterrows():
+            issues.append({"logged_on": loaded_on, "source_file": file_name, "sheet": sheet,
+                           "source_row": int(r.source_row), "stream": "COMMUNITY SUNDAY", "severity": "Warning",
+                           "issue": "Church Area not found", "detail": r.church})
+        community = zone_master.refresh_community(m.community, rows)
+        community.to_csv(m.folder / "MASTER_COMMUNITY.csv", index=False)
+        summary["_masters_changed"] = True
+        rows = rows.assign(week_ending=rows.report_date.map(lambda d: week_ending(d, settings["week_end_day"])
+                                                           .isoformat()),
+                           report_date=rows.report_date.map(lambda d: d.isoformat()), service_type="Sunday",
+                           source_file=file_name, loaded_on=loaded_on)
+        replaced = 0
+        for we in sorted(rows.week_ending.unique()):
+            replaced += db.execute("SELECT COUNT(*) FROM community WHERE week_ending = ? AND service_type = "
+                                   "'Sunday'", (we,))[0][0]
+            db.execute("DELETE FROM community WHERE week_ending = ? AND service_type = 'Sunday'", (we,))
+        db.con.commit()
+        loaded, _ = db.upsert("COMMUNITY", rows)
+        s = summary.setdefault("COMMUNITY SUNDAY", [0, 0, 0])
+        s[0] += loaded
+        s[1] += replaced
+    db.log_issues(issues)
+
+
 def update_zone_master(zone_sheets: dict, db: Databank, m: Masters, file_name: str, loaded_on: str,
                        summary: dict) -> None:
     """Rebuild masters/MASTER_ZONES.csv from a ZONE DETAILS workbook."""
@@ -539,6 +631,16 @@ def process_file(path: Path, db: Databank, m: Masters, settings, aliases, loaded
         update_zone_master(zone_sheets, db, m, path.name, loaded_on, summary)
         return True
     for sheet, raw in sheets:
+        export = service_reports.read_export(raw, sheet, path.name, m)
+        if export is not None:
+            load_service_export(export, db, m, path.name, sheet, settings, loaded_on, summary)
+            recognised = True
+            continue
+        sunday = service_reports.read_sunday(raw, sheet, m)
+        if sunday is not None:
+            load_sunday(sunday, db, m, path.name, sheet, settings, loaded_on, summary)
+            recognised = True
+            continue
         report = transport_reports.read(raw, sheet, path.name, m, settings)
         if report is not None:
             load_transport_report(report, db, path.name, sheet, settings, loaded_on, summary)

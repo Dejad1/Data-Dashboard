@@ -28,7 +28,7 @@ SHEET_ORDER = [
     "HOME", "MASTER DASHBOARD", "WSF DASHBOARD", "MIDWEEK DASHBOARD", "CHOP DASHBOARD",
     "COMMUNITY CHURCH DASHBOARD", "TRANSPORT DASHBOARD", "AREA SCORECARD", "ZONE SCORECARD", "DATA QUALITY",
     "DATA_WSF", "WSF_CELLS_CURRENT", "DATA_MIDWEEK", "DATA_CHOP", "DATA_COMMUNITY", "DATA_TRANSPORT",
-    "DATA_TRANSPORT_COSTS", "DATA_TRANSPORT_BUDGET",
+    "DATA_TRANSPORT_COSTS", "DATA_TRANSPORT_BUDGET", "DATA_SERVICE_AREAS",
     "MASTER_AREAS", "MASTER_ZONES", "MASTER_CELLS", "MASTER_COMMUNITY", "MASTER_FLEET",
     "CALENDAR", "SETTINGS", "CALC_LISTS", "CALC_SEARCH", "CALC_WSF", "CALC_TRANSPORT",
 ]
@@ -41,6 +41,7 @@ TABLE_SOURCES = {
     "TRANSPORT": ("transport_runs", ["week_ending", "category", "area", "source_row"]),
     "TRANSPORT_COSTS": ("transport_costs", ["week_ending", "category", "area", "source_row"]),
     "TRANSPORT_BUDGET": ("transport_budget", ["week_ending", "area_no"]),
+    "SERVICE_AREAS": ("service_areas", ["week_ending", "stream", "area_no"]),
 }
 
 PLACEHOLDER_NOTE = ("Stage 2: this dashboard is built after the WSF DASHBOARD is reviewed, using the same control "
@@ -112,7 +113,8 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
     colour_of = {"WSF": "WSF", "MIDWEEK": "MIDWEEK", "CHOP": "CHOP", "COMMUNITY": "COMMUNITY",
-                 "TRANSPORT": "TRANSPORT", "TRANSPORT_COSTS": "TRANSPORT", "TRANSPORT_BUDGET": "TRANSPORT"}
+                 "TRANSPORT": "TRANSPORT", "TRANSPORT_COSTS": "TRANSPORT", "TRANSPORT_BUDGET": "TRANSPORT",
+                 "SERVICE_AREAS": "QUALITY"}
 
     D.write_settings(wb, settings, existing)
     D.write_calendar(wb, settings)

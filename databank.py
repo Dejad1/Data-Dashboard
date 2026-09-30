@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS transport_budget (
     week_ending TEXT, report_date TEXT, report TEXT, area_no INTEGER, area TEXT, buses_allocated INTEGER,
     cost_per_bus REAL, expected_spend REAL, payable_this_week REAL, source_row INTEGER,
     source_file TEXT, loaded_on TEXT);
+CREATE TABLE IF NOT EXISTS service_areas (
+    stream TEXT, week_ending TEXT, report_date TEXT, area TEXT, area_no INTEGER, total_zones INTEGER,
+    zones_with_report INTEGER, chop_zones INTEGER, community_zones INTEGER, cells_total INTEGER,
+    cells_reported INTEGER, male INTEGER, female INTEGER, children INTEGER,
+    source_file TEXT, loaded_on TEXT,
+    PRIMARY KEY (stream, week_ending, area));
 CREATE TABLE IF NOT EXISTS dq_log (
     logged_on TEXT, source_file TEXT, sheet TEXT, source_row INTEGER,
     stream TEXT, severity TEXT, issue TEXT, detail TEXT, week_ending TEXT);
@@ -71,16 +77,18 @@ TABLES = {
                    "children", "source_file", "loaded_on"]),
     "WSF_ZONE": ("wsf_zone", ["week_ending", "zone"],
                  ["week_ending", "report_date", "area", "zone", "cells_total", "cells_reported",
-                  "male", "female", "children", "origin", "source_file", "loaded_on"]),
+                  "male", "female", "children", "first_timers", "new_converts", "testimonies", "origin",
+                  "source_file", "loaded_on"]),
     "MIDWEEK": ("midweek", ["week_ending", "zone"],
-                ["week_ending", "report_date", "area", "zone", "male", "female", "children",
-                 "source_file", "loaded_on"]),
+                ["week_ending", "report_date", "area", "zone", "male", "female", "children", "first_timers",
+                 "new_converts", "testimonies", "source_file", "loaded_on"]),
     "CHOP": ("chop", ["week_ending", "zone"],
-             ["week_ending", "report_date", "area", "zone", "male", "female", "children",
-              "source_file", "loaded_on"]),
+             ["week_ending", "report_date", "area", "zone", "male", "female", "children", "first_timers",
+              "new_converts", "testimonies", "source_file", "loaded_on"]),
     "COMMUNITY": ("community", ["week_ending", "church", "service_type"],
                   ["week_ending", "report_date", "church", "service_type", "male", "female",
-                   "children", "source_file", "loaded_on"]),
+                   "children", "first_timers", "new_converts", "testimonies", "pastors_present",
+                   "source_file", "loaded_on"]),
 }
 
 
@@ -92,7 +100,9 @@ class Databank:
         self._migrate()
 
     # columns added after a databank was first created: (table, column)
-    ADDED_COLUMNS = [("transport_runs", "location_type"), ("transport_costs", "vehicle_reg")]
+    ADDED_COLUMNS = [("transport_runs", "location_type"), ("transport_costs", "vehicle_reg")] + [
+        (t, c) for t in ("wsf_zone", "midweek", "chop", "community")
+        for c in ("first_timers", "new_converts", "testimonies")] + [("community", "pastors_present")]
 
     def _migrate(self) -> None:
         for table, column in self.ADDED_COLUMNS:
@@ -113,6 +123,10 @@ class Databank:
         if df.empty:
             return 0, 0
         table, nat_key, cols = TABLES[key]
+        df = df.copy()
+        for c in cols:
+            if c not in df:
+                df[c] = 0 if c in ("first_timers", "new_converts", "testimonies", "pastors_present") else None
         cur = self.con.cursor()
         cur.execute(f"CREATE TEMP TABLE IF NOT EXISTS _incoming AS SELECT * FROM {table} WHERE 0")
         cur.execute("DELETE FROM _incoming")
@@ -181,7 +195,7 @@ MASTER_FILES = {
     # Area_Name must stay the 2nd column: workbook formulas read MASTER_AREAS!B:B
     "areas": ("MASTER_AREAS.csv", ["Area_ID", "Area_Name", "Active", "Area_No", "Aliases"]),
     "zones": ("MASTER_ZONES.csv", ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active", "Zone_No", "Address",
-                                   "Zone_Status"]),
+                                   "Zone_Status", "Is_Community"]),
     "cells": ("MASTER_CELLS.csv", ["Cell", "Zone_Name", "Operational"]),
     "community": ("MASTER_COMMUNITY.csv", ["Church_ID", "Church_Name", "Location", "Active"]),
     "fleet": ("MASTER_FLEET.csv", ["Vehicle_ID", "Category", "Capacity", "Owner", "Status",
@@ -189,7 +203,7 @@ MASTER_FILES = {
 }
 
 # Columns that may be missing from older master files (filled with blanks)
-OPTIONAL_COLUMNS = {"Area_No", "Aliases", "Zone_No", "Address", "Zone_Status"}
+OPTIONAL_COLUMNS = {"Area_No", "Aliases", "Zone_No", "Address", "Zone_Status", "Is_Community"}
 
 
 def norm_key(value) -> str:
@@ -280,7 +294,10 @@ class Masters:
             if str(addr).strip():
                 self.zone_addresses.setdefault(area, []).append((code, addr))
         self.zone_has_chop = {n: yes(f) for n, f in zip(z["Zone_Name"], z["Has_CHOP"])}
-        self.active_zones = z.loc[z["Active"].map(yes), ["Zone_Name", "Area_Name"]]
+        # Community Churches are zones in the reporting system but never part of the zonal universe
+        self.community_zones = set(z.loc[z["Is_Community"].map(yes), "Zone_Name"])
+        self.active_zones = z.loc[z["Active"].map(yes) & ~z["Zone_Name"].isin(self.community_zones),
+                                  ["Zone_Name", "Area_Name"]]
         c = self.cells
         self.cell_by_key = {norm_key(n): n for n in c["Cell"]}
         self.cell_zone = dict(zip(c["Cell"], c["Zone_Name"]))
@@ -288,7 +305,6 @@ class Masters:
         cc = self.community
         self.church_by_key = {norm_key(n): n for n in cc["Church_Name"]}
         self.church_by_key.update({norm_key(i): n for i, n in zip(cc["Church_ID"], cc["Church_Name"])})
-        self.church_by_key.update({norm_key(i): n for i, n in zip(cc["Location"], cc["Church_Name"])})
         f = self.fleet
         self.vehicle_by_key = {norm_key(v): v for v in f["Vehicle_ID"]}
         self.vehicle = f.set_index("Vehicle_ID").to_dict("index")

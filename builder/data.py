@@ -47,6 +47,11 @@ class TableSpec:
         return f"{self.sheet}!${L}:${L}"
 
 
+MINISTRY = [Column("First_Timers", "first_timers", fmt=FMT_INT0, width=10, kind="int"),
+            Column("New_Converts", "new_converts", fmt=FMT_INT0, width=11, kind="int"),
+            Column("Testimonies", "testimonies", fmt=FMT_INT0, width=10, kind="int")]
+
+
 def attendance_cols(unit_cols: list[Column]) -> list[Column]:
     return [Column("Week_Ending", formula=WEEK_ENDING_F, fmt=FMT_DATE, width=13, kind="date"),
             Column("Report_Date", "report_date", fmt=FMT_DATE, width=13, kind="date"),
@@ -55,7 +60,8 @@ def attendance_cols(unit_cols: list[Column]) -> list[Column]:
             Column("Female", "female", fmt=FMT_INT0, width=9, kind="int"),
             Column("Adult_Total", formula=ADULT_F, fmt=FMT_INT0, width=11),
             Column("Children", "children", fmt=FMT_INT0, width=9, kind="int"),
-            Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11)]
+            Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11),
+            *MINISTRY]
 
 
 AUDIT = [Column("Source_File", "source_file", width=34), Column("Loaded_On", "loaded_on", fmt=FMT_DATETIME, width=17,
@@ -75,14 +81,33 @@ SPECS = {
         Column("Adult_Total", formula=ADULT_F, fmt=FMT_INT0, width=11),
         Column("Children", "children", fmt=FMT_INT0, width=9, kind="int"),
         Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11),
+        *MINISTRY,
         *AUDIT]),
     "MIDWEEK": TableSpec("DATA_MIDWEEK", "tblMidweek",
                          attendance_cols([Column("Area", "area", width=18), Column("Zone", "zone", width=24)]) + AUDIT),
     "CHOP": TableSpec("DATA_CHOP", "tblCHOP",
                       attendance_cols([Column("Area", "area", width=18), Column("Zone", "zone", width=24)]) + AUDIT),
     "COMMUNITY": TableSpec("DATA_COMMUNITY", "tblCommunity",
-                           attendance_cols([Column("Church", "church", width=30),
-                                            Column("Service_Type", "service_type", width=12)]) + AUDIT),
+                           attendance_cols([Column("Church", "church", width=12),
+                                            Column("Service_Type", "service_type", width=12)])
+                           + [Column("Pastors_Present", "pastors_present", fmt=FMT_INT0, width=9, kind="int")]
+                           + AUDIT),
+    "SERVICE_AREAS": TableSpec("DATA_SERVICE_AREAS", "tblServiceAreas", [
+        Column("Week_Ending", formula=WEEK_ENDING_F, fmt=FMT_DATE, width=13, kind="date"),
+        Column("Report_Date", "report_date", fmt=FMT_DATE, width=13, kind="date"),
+        Column("Stream", "stream", width=9), Column("Area", "area", width=18),
+        Column("Total_Zones", "total_zones", fmt=FMT_INT0, width=9, kind="int"),
+        Column("Zones_With_Report", "zones_with_report", fmt=FMT_INT0, width=11, kind="int"),
+        Column("CHOP_Zones", "chop_zones", fmt=FMT_INT0, width=9, kind="int"),
+        Column("Community_Zones", "community_zones", fmt=FMT_INT0, width=11, kind="int"),
+        Column("Cells_Total", "cells_total", fmt=FMT_INT0, width=9, kind="int"),
+        Column("Cells_Reported", "cells_reported", fmt=FMT_INT0, width=10, kind="int"),
+        Column("Male", "male", fmt=FMT_INT0, width=8, kind="int"),
+        Column("Female", "female", fmt=FMT_INT0, width=8, kind="int"),
+        Column("Adult_Total", formula=ADULT_F, fmt=FMT_INT0, width=11),
+        Column("Children", "children", fmt=FMT_INT0, width=9, kind="int"),
+        Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11),
+        *AUDIT]),
     "TRANSPORT": TableSpec("DATA_TRANSPORT", "tblTransport", [
         Column("Week_Ending", formula=WEEK_ENDING_F, fmt=FMT_DATE, width=13, kind="date"),
         Column("Report_Date", "report_date", fmt=FMT_DATE, width=13, kind="date"),

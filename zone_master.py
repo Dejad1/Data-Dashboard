@@ -25,7 +25,8 @@ from transport_reports import AreaMatcher, blank, hkey, zone_code
 
 SIGNATURE_EXISTING = ("zincodes",)
 SIGNATURE_NEW = ("proposedzonalno",)
-COLUMNS = ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active", "Zone_No", "Address", "Zone_Status"]
+COLUMNS = ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active", "Zone_No", "Address", "Zone_Status",
+           "Is_Community"]
 
 
 def is_zone_details(raw: pd.DataFrame) -> str | None:
@@ -136,14 +137,60 @@ def build(sheets: dict[str, pd.DataFrame], masters: Masters, existing: pd.DataFr
                            "Zone_No": str(int(code[5:])), "Address": "", "Zone_Status": "Seen in reports only"}
             note("Warning", "Zone code not in ZONE DETAILS",
                  f"{code} ({area}) appears in transport reports but not in the zone list; kept")
-    df = pd.DataFrame(zones.values(), columns=COLUMNS)
+    df = pd.DataFrame(zones.values(), columns=COLUMNS).fillna("")
     # keep Has_CHOP / Active choices already made in the master
     if len(existing):
         prev = existing.set_index("Zone_ID")
-        for c in ("Has_CHOP", "Active"):
+        for c in ("Has_CHOP", "Active", "Is_Community"):
             if c in prev:
                 kept = df["Zone_ID"].map(prev[c]).fillna("")
                 df[c] = kept.where(kept != "", df[c])
     df["_a"] = df["Zone_ID"].str[3:5].astype(int)
     df["_z"] = df["Zone_ID"].str[5:].astype(int)
     return df.sort_values(["_a", "_z"]).drop(columns=["_a", "_z"]).reset_index(drop=True), issues
+
+
+def apply_export_flags(master: pd.DataFrame, flags: pd.DataFrame, stream: str):
+    """Refresh MASTER_ZONES from a reporting-system export: add zones it doesn't have, and take the
+    CHOP / Community flags from the system (the CHOP export itself leaves forChop blank, so it is ignored)."""
+    issues = []
+    df = master.copy()
+    for c in COLUMNS:
+        if c not in df:
+            df[c] = ""
+    df = df[COLUMNS].fillna("")
+    known = set(df.Zone_ID)
+    new = flags[~flags.zone.isin(known) & ~flags.zone.str.startswith("AREA")]
+    if len(new):
+        add = pd.DataFrame({"Zone_ID": new.zone, "Zone_Name": new.zone, "Area_Name": new.area, "Has_CHOP": "",
+                            "Active": "Y", "Zone_No": new.zone.str[5:].astype(int).astype(str),
+                            "Address": new.zone_name, "Zone_Status": "From reporting system", "Is_Community": ""})
+        df = pd.concat([df, add], ignore_index=True)
+        issues.append({"severity": "Info", "issue": "Zones added from the reporting system",
+                       "detail": f"{len(new)} zones not in ZONE DETAILS: " + ", ".join(new.zone.head(15)) +
+                                 (" ..." if len(new) > 15 else "")})
+    f = flags.set_index("zone")
+    if stream != "CHOP":
+        chop = df.Zone_ID.map(f.for_chop)
+        df.loc[chop.notna(), "Has_CHOP"] = chop[chop.notna()].map({True: "Y", False: "N"})
+    comm = df.Zone_ID.map(f.for_community)
+    df.loc[comm == True, "Is_Community"] = "Y"   # noqa: E712
+    df.loc[(comm == False) & (df.Is_Community == ""), "Is_Community"] = "N"   # noqa: E712
+    df["_a"] = df.Zone_ID.str[3:5].astype(int)
+    df["_z"] = df.Zone_ID.str[5:].astype(int)
+    return df.sort_values(["_a", "_z"]).drop(columns=["_a", "_z"]).reset_index(drop=True), issues
+
+
+def refresh_community(community: pd.DataFrame, rows: pd.DataFrame) -> pd.DataFrame:
+    """MASTER_COMMUNITY from the Community Church Sunday workbook: one church per zincode."""
+    cols = ["Church_ID", "Church_Name", "Location", "Active"]
+    have = community.copy() if len(community) else pd.DataFrame(columns=cols)
+    latest = rows.sort_values("report_date").groupby("church").last().reset_index()
+    for _, r in latest.iterrows():
+        name = r.location.title() if r.location else r.church
+        if r.church in set(have.Church_ID):
+            have.loc[have.Church_ID == r.church, ["Church_Name", "Location"]] = [name, r.area or ""]
+        else:
+            have = pd.concat([have, pd.DataFrame([[r.church, name, r.area or "", "Y"]], columns=cols)],
+                             ignore_index=True)
+    return have[cols].sort_values("Church_ID").reset_index(drop=True)
