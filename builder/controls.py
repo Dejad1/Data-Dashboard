@@ -32,8 +32,10 @@ def _sheet(wb, name):
     return ws
 
 
-def search_helper(wb, key: str, dash: str, block: int, n_rows: int) -> str:
-    """Build a 4-column block in CALC_SEARCH and return the defined name of the list."""
+def search_helper(wb, key: str, dash: str, block: int, n_rows: int, transport: bool = False) -> str:
+    """Build a 4-column block in CALC_SEARCH and return the defined name of the list.
+
+    `transport`: leave out Areas outside transport operations (MASTER_AREAS In_Transport = N)."""
     ws = _sheet(wb, "CALC_SEARCH")
     c0 = block * 5 + 1
     A, B, C, D = (col(c0 + i) for i in range(4))
@@ -48,8 +50,9 @@ def search_helper(wb, key: str, dash: str, block: int, n_rows: int) -> str:
     ws[f"{D}4"] = "=COUNTA(MASTER_ZONES!$B:$B)-1"
     for i in range(1, n_rows + 1):
         r = i + 1
+        area_ok = f'INDEX(MASTER_AREAS!$F:$F,{i + 1})<>"N",' if transport else ""
         ws[f"{A}{r}"] = (
-            f'=IF({scope}="Area",IF({i}<=${D}$3,IF(OR({term}="",ISNUMBER(SEARCH({term},INDEX(MASTER_AREAS!$B:$B,{i + 1})))),{i},""),""),'
+            f'=IF({scope}="Area",IF({i}<=${D}$3,IF(AND({area_ok}OR({term}="",ISNUMBER(SEARCH({term},INDEX(MASTER_AREAS!$B:$B,{i + 1}))))),{i},""),""),'
             f'IF({scope}="Zone",IF({i}<=${D}$4,IF(OR({term}="",ISNUMBER(SEARCH({term},INDEX(MASTER_ZONES!$B:$B,{i + 1})))),{i},""),""),""))')
     for k in range(1, MAX_MATCHES + 1):
         r = k + 1

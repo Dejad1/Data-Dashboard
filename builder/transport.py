@@ -74,7 +74,7 @@ def build_calc(wb, n_areas: int):
     inputs = [
         ("Scope", f"={D}!{SCOPE}"),
         ("Selection", f'=IF({D}!{SELECT}="","",{D}!{SELECT})'),
-        ("Selection valid", '=IF(B3="Global",TRUE,IF(B3="Area",COUNTIF(MASTER_AREAS!$B:$B,B4)>0,'
+        ("Selection valid", '=IF(B3="Global",TRUE,IF(B3="Area",COUNTIFS(MASTER_AREAS!$B:$B,B4,MASTER_AREAS!$F:$F,"<>N")>0,'
                             'COUNTIF(MASTER_ZONES!$B:$B,B4)>0))'),
         ("Area criterion", '=IF(B3="Area",B4,"*")'),
         ("Zone criterion", '=IF(B3="Zone",B4,"*")'),
@@ -245,7 +245,9 @@ def build_calc(wb, n_areas: int):
         r = AREA0 + i
         a = f"{A['Area']}{r}"
         ac = lambda wk: f"{T.ref('Week_Ending')},{wk},{T.ref('Area')},{a}"
-        ws[a] = f'=IFERROR(INDEX(MASTER_AREAS!$B:$B,{i + 2})&"","")'
+        # Areas outside transport operations (In_Transport = N, e.g. CANAANLAND 1) are left out
+        ws[a] = (f'=IFERROR(IF(INDEX(MASTER_AREAS!$F:$F,{i + 2})="N","",'
+                 f'INDEX(MASTER_AREAS!$B:$B,{i + 2})&""),"")')
         g = lambda col, wk="$B$10", extra="": f'IF(OR({a}="",$B$10=0),0,SUMIFS({T.ref(col)},{ac(wk)}{extra}))'
         ws[f"{A['Riders']}{r}"] = "=" + g("Grand_Total")
         ws[f"{A['Buses ran']}{r}"] = "=" + g("Buses", extra=f',{T.ref("Status")},"Ran"')
@@ -345,7 +347,7 @@ def build_dashboard(wb, n_zones: int, top: dict):
     dashboard_canvas(ws, "TRANSPORT", "TRANSPORT DASHBOARD",
                      "FT Procured (hired LT) · church coasters · EV/TATA · WSF Procured (member-paid) · riders, seats, "
                      "spend and optimisation", n_cols=14, widths={"B": 15})
-    select_list = search_helper(wb, "TRANSPORT", DASH, 1, n_zones + 200)
+    select_list = search_helper(wb, "TRANSPORT", DASH, 1, n_zones + 200, transport=True)
     week_name, _, _ = week_list(wb, "TRANSPORT", SPECS["TRANSPORT"].ref("Week_Ending"), 1)
     control_strip(wb, ws, "TRANSPORT", colour, "Transport", select_list, week_name)
     C = lambda cell: f"{CALC}!{cell}"
@@ -354,8 +356,9 @@ def build_dashboard(wb, n_zones: int, top: dict):
     ws.merge_cells("L4:O4")
     ws["L4"].font = font(10, True, INK)
     ws["B5"] = (f'=IF({C("$B$9")}=0,"No transport reports loaded yet. Put the weekly transport files in the inbox '
-                f'and run ingest.py.",IF(NOT({C("$B$5")}),"⚠  Pick "&IF({C("$B$3")}="Area","an Area","a Zone")&'
-                f'" from SELECT (type part of the name in SEARCH first).",IF({C("$B$3")}="Zone",'
+                f'and run ingest.py.",IF(NOT({C("$B$5")}),IF(AND({C("$B$3")}="Area",COUNTIFS(MASTER_AREAS!$B:$B,{C("$B$4")},MASTER_AREAS!$F:$F,"N")>0),'
+                f'{C("$B$4")}&" is not part of transport operations; pick another Area.","⚠  Pick "&IF({C("$B$3")}="Area","an Area","a Zone")&'
+                f'" from SELECT (type part of the name in SEARCH first)."),IF({C("$B$3")}="Zone",'
                 f'"Zone scope shows FT Procured and WSF Procured only (coasters, EV/TATA, fuel and budget are by Area).",'
                 f'IF({C("$" + SER["has"] + "$21")}=0,"No transport reports in this scope for the selected week.",'
                 f'"Utilisation = riders ÷ seats offered, on buses whose capacity is known. Spend = hire cost + coaster '

@@ -25,7 +25,7 @@ inbox/ (weekly files)  ──ingest.py──►  databank.sqlite  ──build_wo
 
    | File | Columns |
    |---|---|
-   | `MASTER_AREAS.csv` | Area_ID, Area_Name, Active (Y/N), Area_No, Aliases (other spellings, separated by `;`) |
+   | `MASTER_AREAS.csv` | Area_ID, Area_Name, Active (Y/N), Area_No, Aliases (other spellings, separated by `;`), In_Transport (Y/N). CANAANLAND 1 (Area 000) is an Area for every service but is not in transport operations (In_Transport = N): it is left out of the transport rankings, flags, budget views and SELECT list |
    | `MASTER_ZONES.csv` | Zone_ID, Zone_Name, Area_Name, Has_CHOP (Y/N), Active (Y/N), Zone_No, Address, Zone_Status. Built from the ZONE DETAILS workbook (see below) |
    | `MASTER_CELLS.csv` | Cell, Zone_Name, Operational (Y/N) |
    | `MASTER_COMMUNITY.csv` | Church_ID, Church_Name, Location, Active (Y/N) |
@@ -135,7 +135,9 @@ A "–" means there is no data for that figure. A real zero shows as 0.
 - A zone's code is its Area code plus its zone code, e.g. Area 004 zone 12 becomes `LFC0412`. The report date comes from the file name.
 - Zones the system flags **forCommunity** are the 35 **Community Churches**. Their WSF, Midweek and CHOP figures go to the Community tables and are never added into zonal totals.
 - A zone registered twice in the system is added up once.
-- Attendance an Area reports above its zones is kept as an **AREA LEVEL** row. Most CHOP is reported this way, at the Area facility.
+- Attendance an Area reports above its zones is kept as an **AREA LEVEL** row.
+- **WSF** is reported by cell. Compliance is cells with a report ÷ operational cells, from the export's cell counts per zone.
+- **CHOP** is held at selected zones only (Has_CHOP = Y, 673 zones) and reported by zone. The `ALL CHOP` export, however, itemises only the other zones. The CHOP zones' attendance appears only in each Area's summary, so it is kept as one **AREA nn CHOP ZONES** row per Area. Area and Global totals are right, but a single CHOP zone shows no figures until an export lists the CHOP zones themselves. Zones not marked for CHOP that still report CHOP are listed on DATA QUALITY.
 - Minister names and phone numbers are never read.
 
 **Compliance** uses the system's own count of zones with a report, minus the Community Churches:

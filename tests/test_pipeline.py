@@ -416,6 +416,44 @@ def test_service_export_rules(tmp_path):
     assert bool(flags.loc["LFC0401", "for_chop"]) and bool(flags.loc["LFC0412", "for_community"])
 
 
+
+def test_chop_export_keeps_chop_zones_as_area_rows(tmp_path):
+    """CHOP export: the CHOP zones' attendance is only in the Area summary -> one 'AREA nn CHOP ZONES' row."""
+    import service_reports
+    from databank import Masters
+    (tmp_path / "masters").mkdir()
+    pd.DataFrame([{"Area_ID": "A04", "Area_Name": "OJU ORE", "Active": "Y", "Area_No": "4", "Aliases": ""}]) \
+        .to_csv(tmp_path / "masters" / "MASTER_AREAS.csv", index=False)
+    pd.DataFrame([{"Zone_ID": c, "Zone_Name": c, "Area_Name": "OJU ORE", "Has_CHOP": h, "Active": "Y"}
+                  for c, h in (("LFC0401", "Y"), ("LFC0402", "N"))]) \
+        .to_csv(tmp_path / "masters" / "MASTER_ZONES.csv", index=False)
+    m = Masters.load(tmp_path / "masters")
+    area = {"type": "AreaSummary", "areaCode": "004", "areaName": "OJU ORE", "totalZones": 2, "zonesWithReport": 2,
+            "totalCells": 10, "cellsWithReport": 2, "chopCount": 1, "communityCount": 0,
+            "totalMale": 30, "totalFemale": 30, "totalChildren": 10, "total": 70}
+    zone = {"type": "ZoneSummary", "areaCode": "004", "areaName": "OJU ORE", "zoneCode": "02", "zoneName": "TWO",
+            "totalCells": 5, "cellsWithReport": 1, "forChop": None, "forCommunity": False,
+            "totalMale": 5, "totalFemale": 5, "totalChildren": 0, "total": 10}
+    res = service_reports.read_export(_export([area], [zone]), "CHOP SERVICE",
+                                      "ALL_CHOPArea_By_Area_Report_-2026-09-23-2026-09-23.xlsx", m)
+    got = res.zones.set_index("zone")
+    assert got.loc["AREA 04 CHOP ZONES", "male"] == 25 and got.loc["LFC0402", "male"] == 5
+    issues = {i["issue"] for i in res.issues}
+    assert {"CHOP zones not itemised in the export", "CHOP report from a zone not marked for CHOP"} <= issues
+
+
+def test_area_outside_transport(root, tmp_path):
+    """CANAANLAND 1 (In_Transport = N) never appears in the transport Area block or its SELECT list."""
+    from databank import Masters
+    assert Masters.load(Path(__file__).resolve().parent.parent / "masters").no_transport == {"CANAANLAND 1"}
+    out = tmp_path / "wb.xlsx"
+    build_workbook.build(root, out, empty=True)
+    wb = load_workbook(out)
+    assert 'MASTER_AREAS!$F:$F,2)="N"' in wb["CALC_TRANSPORT"]["AE3"].value
+    assert "MASTER_AREAS!$F:$F" in wb["CALC_SEARCH"]["F2"].value         # TRANSPORT block
+    assert "MASTER_AREAS!$F:$F" not in wb["CALC_SEARCH"]["A2"].value     # WSF block keeps every Area
+    assert wb["MASTER_AREAS"]["F1"].value == "In_Transport"
+
 def test_sunday_workbook_rules(tmp_path):
     """Community Sunday sheet: one block per Sunday; old template blocks skipped; codes fixed by Area."""
     import datetime as _dt

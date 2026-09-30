@@ -193,7 +193,7 @@ class Databank:
 
 MASTER_FILES = {
     # Area_Name must stay the 2nd column: workbook formulas read MASTER_AREAS!B:B
-    "areas": ("MASTER_AREAS.csv", ["Area_ID", "Area_Name", "Active", "Area_No", "Aliases"]),
+    "areas": ("MASTER_AREAS.csv", ["Area_ID", "Area_Name", "Active", "Area_No", "Aliases", "In_Transport"]),
     "zones": ("MASTER_ZONES.csv", ["Zone_ID", "Zone_Name", "Area_Name", "Has_CHOP", "Active", "Zone_No", "Address",
                                    "Zone_Status", "Is_Community"]),
     "cells": ("MASTER_CELLS.csv", ["Cell", "Zone_Name", "Operational"]),
@@ -203,7 +203,7 @@ MASTER_FILES = {
 }
 
 # Columns that may be missing from older master files (filled with blanks)
-OPTIONAL_COLUMNS = {"Area_No", "Aliases", "Zone_No", "Address", "Zone_Status", "Is_Community"}
+OPTIONAL_COLUMNS = {"Area_No", "Aliases", "In_Transport", "Zone_No", "Address", "Zone_Status", "Is_Community"}
 
 
 def norm_key(value) -> str:
@@ -285,6 +285,8 @@ class Masters:
                 if str(k).strip():
                     self.area_by_key[norm_key(k)] = r["Area_Name"]
         self.area_no = {r["Area_No"]: r["Area_Name"] for _, r in self.areas.iterrows() if str(r["Area_No"]).strip()}
+        # Areas that take part in every service except transport (e.g. CANAANLAND 1)
+        self.no_transport = set(self.areas.loc[self.areas["In_Transport"].str.strip().str.upper() == "N", "Area_Name"])
         self.zone_by_key = {norm_key(n): n for n in z["Zone_Name"]}
         self.zone_by_key.update({norm_key(i): n for i, n in zip(z["Zone_ID"], z["Zone_Name"])})
         self.zone_area = dict(zip(z["Zone_Name"], z["Area_Name"]))

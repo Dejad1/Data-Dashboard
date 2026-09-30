@@ -568,7 +568,7 @@ def tag_coaster_locations(db: Databank, week: str) -> None:
 
 
 def load_transport_report(report, db: Databank, file_name: str, sheet: str, settings, loaded_on: str,
-                          summary: dict) -> None:
+                          summary: dict, no_transport: set = frozenset()) -> None:
     """Load one transport report sheet; a re-sent report replaces that week's rows for the category."""
     label = f"TRANSPORT {report.layout}"
     issues = [dict(i, logged_on=loaded_on, source_file=file_name, sheet=sheet, stream=label) for i in report.issues]
@@ -608,6 +608,15 @@ def load_transport_report(report, db: Databank, file_name: str, sheet: str, sett
                            "stream": label, "severity": "Warning", "issue": "File total differs from its rows",
                            "detail": f"{label_}: file says {file_total:,.0f}, rows add up to {loaded_total:,.0f}",
                            "week_ending": we})
+    if no_transport and "area" in df:
+        # Areas outside transport operations (MASTER_AREAS In_Transport = N): kept, but they never
+        # appear in the transport rankings, flags or budget views
+        for area, g in df[df.area.isin(no_transport)].groupby("area"):
+            issues.append({"logged_on": loaded_on, "source_file": file_name, "sheet": sheet, "source_row": None,
+                           "stream": label, "severity": "Warning", "issue": "Transport row for an Area outside transport",
+                           "detail": f"{len(g)} row(s) name {area}, which is not in transport operations "
+                                     "(MASTER_AREAS In_Transport = N); check the Area on these rows",
+                           "week_ending": we})
     loaded, replaced = db.replace_report(report.table, df, keys)
     if report.layout in ("COASTER_REPORT", "COASTER_FUEL"):
         tag_coaster_locations(db, we)
@@ -643,7 +652,7 @@ def process_file(path: Path, db: Databank, m: Masters, settings, aliases, loaded
             continue
         report = transport_reports.read(raw, sheet, path.name, m, settings)
         if report is not None:
-            load_transport_report(report, db, path.name, sheet, settings, loaded_on, summary)
+            load_transport_report(report, db, path.name, sheet, settings, loaded_on, summary, m.no_transport)
             recognised = True
             continue
         hdr, mapping = find_header(raw, aliases)

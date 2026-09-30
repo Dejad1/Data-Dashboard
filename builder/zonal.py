@@ -9,8 +9,9 @@ from the reporting system's own Area summaries (DATA_SERVICE_AREAS):
              "No CHOP in this zone" instead of zeros)
 
 Community Church zones are reported on their own dashboard and never counted
-here.  CHOP attendance held at the Area facility is kept on "AREA LEVEL" rows,
-so Area and Global totals include it.
+here.  CHOP is held at selected zones; the export gives the CHOP zones' attendance
+as Area totals only, kept on "AREA nn CHOP ZONES" rows so Area and Global totals
+include it.
 """
 from __future__ import annotations
 
@@ -54,7 +55,7 @@ MIDWEEK = Zonal("MIDWEEK", "MIDWEEK DASHBOARD", "CALC_MIDWEEK", "MIDWEEK", "MIDW
                 "Zonal Midweek service · attendance and zone reporting compliance (Community Churches excluded)",
                 "Total_Zones", "zones", 2)
 CHOP = Zonal("CHOP", "CHOP DASHBOARD", "CALC_CHOP", "CHOP", "CHOP DASHBOARD",
-             "Covenant Hour of Prayer · CHOP zones only · attendance includes CHOP held at the Area facility",
+             "Covenant Hour of Prayer · held at selected CHOP zones · reported by zone",
              "CHOP_Zones", "CHOP zones", 3, chop_only=True)
 
 SER = {}
@@ -287,12 +288,14 @@ def build_dashboard(wb, z: Zonal, n_zones: int, calc_info: dict):
     ws.merge_cells("L4:O4")
     ws["L4"].font = font(10, True, INK)
     no_service = "No CHOP in this zone." if z.chop_only else "This zone is not in this service."
+    zone_note = (f'IF({C("$B$3")}="Zone","The CHOP export gives CHOP-zone attendance as Area totals only, so a '
+                 f'single CHOP zone may show no figures; select its Area.",' if z.chop_only else "")
     ws["B5"] = (f'=IF({C("$B$9")}=0,"No {z.key.title()} data loaded yet. Put the export in the inbox and run '
                 f'ingest.py.",IF(NOT({C("$B$5")}),"⚠  Pick "&IF({C("$B$3")}="Area","an Area","a Zone")&'
                 f'" from SELECT (type part of the name in SEARCH first).",IF({C("$B$18")},"This zone is a '
                 f'Community Church: see the COMMUNITY CHURCH DASHBOARD.",IF(NOT({C("$B$17")}),"{no_service}",'
-                f'"Compliance uses the reporting system\'s count of {z.universe_label} with a report. '
-                f'Community Churches are excluded."))))')
+                f'{zone_note}"Compliance uses the reporting system\'s count of {z.universe_label} with a report. '
+                f'Community Churches are excluded."{")" if z.chop_only else ""}))))')
     ws.merge_cells("B5:O5")
     ws["B5"].font = font(9, False, tint(colour, 0.2), italic=True)
     ws["B5"].alignment = LEFT

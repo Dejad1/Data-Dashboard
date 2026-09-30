@@ -6,8 +6,13 @@
      * zones flagged forCommunity are Community Churches: their figures go to the
        Community tables, never into zonal totals
      * a zone registered twice in the system is added up once
-     * attendance an Area reports above its zones (e.g. CHOP held at the Area
-       facility) is kept as an "AREA LEVEL" row so Area totals stay right
+     * attendance an Area reports above its zones is kept as an "AREA LEVEL nn"
+       row so Area totals stay right
+     * CHOP is held at selected zones (MASTER_ZONES Has_CHOP = Y) and reported per
+       zone, but the CHOP export itemises only the other zones: the CHOP zones'
+       attendance appears only in the Area summary, so it is kept as one
+       "AREA nn CHOP ZONES" row per Area.  Zones reported and the CHOP-zone count
+       come from the Area summary
      * minister names and phone numbers are never read
      * the report date comes from the file name ("..._-2026-09-19-2026-09-19")
 
@@ -150,8 +155,11 @@ def read_export(raw: pd.DataFrame, sheet: str, file_name: str, masters: Masters)
         if any(people):
             if all(v >= 0 for v in people):
                 diff = {k: max(0, v) for k, v in diff.items()}
-                extra.append(dict(zone=f"AREA LEVEL {int(ar.area_no):02d}", area=ar.area, zone_name="Area level",
-                                  cells_total=0, cells_reported=0, **diff))
+                if stream == "CHOP":
+                    zone, name = f"AREA {int(ar.area_no):02d} CHOP ZONES", "CHOP zones (not itemised in the export)"
+                else:
+                    zone, name = f"AREA LEVEL {int(ar.area_no):02d}", "Area level"
+                extra.append(dict(zone=zone, area=ar.area, zone_name=name, cells_total=0, cells_reported=0, **diff))
                 if stream != "CHOP":
                     res.issue("Info", "Area total above its zones",
                               f"{ar.area}: {sum(diff[k] for k in ('male', 'female', 'children')):,} attendance "
@@ -161,9 +169,20 @@ def read_export(raw: pd.DataFrame, sheet: str, file_name: str, masters: Masters)
                           f"{ar.area}: Area row {int(ar.total):,}, zones add up to {int(in_zones.total.sum()):,}; "
                           "zone figures used")
     if stream == "CHOP" and extra:
-        res.issue("Info", "CHOP reported at Area level",
+        res.issue("Info", "CHOP zones not itemised in the export",
                   f"{sum(e['male'] + e['female'] + e['children'] for e in extra):,} CHOP attendance across "
-                  f"{len(extra)} Areas is reported for the Area, not a zone (kept as AREA LEVEL rows)")
+                  f"{len(extra)} Areas comes from the CHOP zones, which the export gives as Area totals only "
+                  "(kept as 'AREA nn CHOP ZONES' rows). Zone-level CHOP figures need an export that lists the "
+                  "CHOP zones themselves.")
+    if stream == "CHOP":
+        chop_zones = set(masters.zones.loc[masters.zones["Has_CHOP"].str.upper() == "Y", "Zone_Name"]) \
+            if len(masters.zones) else set()
+        people = zonal.male + zonal.female + zonal.children
+        odd = zonal[(people > 0) & ~zonal.zone.isin(chop_zones) & ~zonal.zone.str.startswith("AREA")]
+        if chop_zones and len(odd):
+            res.issue("Info", "CHOP report from a zone not marked for CHOP",
+                      f"{len(odd)} zones: " + ", ".join(odd.zone.head(20)) + (" ..." if len(odd) > 20 else "") +
+                      ". Set Has_CHOP = Y in MASTER_ZONES if CHOP now holds there.")
     zonal = pd.concat([zonal, pd.DataFrame(extra)], ignore_index=True) if extra else zonal
     reported = (zonal.male + zonal.female + zonal.children) > 0
     res.zones = zonal if stream == "WSF" else zonal[reported]
