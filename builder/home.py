@@ -28,7 +28,8 @@ HOW_TO = [
 ]
 
 STREAM_STATUS = [("WSF", "WSF"), ("Midweek", "MIDWEEK"), ("CHOP", "CHOP"), ("Community Church", "COMMUNITY"),
-                 ("Transport operations", "TRANSPORT_OPS"), ("Transport finance", "TRANSPORT_FINANCE")]
+                 ("Transport bus runs", "TRANSPORT"), ("Transport coaster fuel", "TRANSPORT_COSTS"),
+                 ("Transport FT budget", "TRANSPORT_BUDGET")]
 
 
 def build_home(wb, stage_note: str | None = None):

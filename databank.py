@@ -41,17 +41,20 @@ CREATE TABLE IF NOT EXISTS community (
     male INTEGER, female INTEGER, children INTEGER,
     source_file TEXT, loaded_on TEXT,
     PRIMARY KEY (week_ending, church, service_type));
-CREATE TABLE IF NOT EXISTS transport_ops (
-    week_ending TEXT, report_date TEXT, category TEXT, vehicle_id TEXT,
-    area TEXT, zone TEXT, hired_by_type TEXT,
-    trips INTEGER, ridership INTEGER, operational TEXT,
-    source_file TEXT, loaded_on TEXT,
-    PRIMARY KEY (week_ending, vehicle_id));
-CREATE TABLE IF NOT EXISTS transport_fin (
-    week_ending TEXT, report_date TEXT, category TEXT, area TEXT, zone TEXT,
-    cost_type TEXT, amount REAL, paid_by TEXT,
-    source_file TEXT, loaded_on TEXT,
-    PRIMARY KEY (week_ending, category, area, zone, cost_type));
+CREATE TABLE IF NOT EXISTS transport_runs (
+    week_ending TEXT, report_date TEXT, report TEXT, category TEXT, vehicle_type TEXT, area TEXT, zone_code TEXT,
+    location TEXT, vehicle_id TEXT, buses INTEGER, capacity REAL, trips INTEGER,
+    male INTEGER, female INTEGER, children INTEGER, cost REAL, paid_by TEXT, status TEXT, service TEXT,
+    remarks_category TEXT, remarks TEXT, in_church TEXT, source_row INTEGER,
+    source_file TEXT, loaded_on TEXT);
+CREATE TABLE IF NOT EXISTS transport_costs (
+    week_ending TEXT, report_date TEXT, report TEXT, category TEXT, area TEXT, vehicle_id TEXT, cost_type TEXT,
+    hub_status TEXT, trips REAL, quantity REAL, unit_price REAL, amount REAL, payable TEXT, paid_by TEXT,
+    source_row INTEGER, source_file TEXT, loaded_on TEXT);
+CREATE TABLE IF NOT EXISTS transport_budget (
+    week_ending TEXT, report_date TEXT, report TEXT, area_no INTEGER, area TEXT, buses_allocated INTEGER,
+    cost_per_bus REAL, expected_spend REAL, payable_this_week REAL, source_row INTEGER,
+    source_file TEXT, loaded_on TEXT);
 CREATE TABLE IF NOT EXISTS dq_log (
     logged_on TEXT, source_file TEXT, sheet TEXT, source_row INTEGER,
     stream TEXT, severity TEXT, issue TEXT, detail TEXT, week_ending TEXT);
@@ -77,13 +80,6 @@ TABLES = {
     "COMMUNITY": ("community", ["week_ending", "church", "service_type"],
                   ["week_ending", "report_date", "church", "service_type", "male", "female",
                    "children", "source_file", "loaded_on"]),
-    "TRANSPORT_OPS": ("transport_ops", ["week_ending", "vehicle_id"],
-                      ["week_ending", "report_date", "category", "vehicle_id", "area", "zone",
-                       "hired_by_type", "trips", "ridership", "operational", "source_file",
-                       "loaded_on"]),
-    "TRANSPORT_FINANCE": ("transport_fin", ["week_ending", "category", "area", "zone", "cost_type"],
-                          ["week_ending", "report_date", "category", "area", "zone", "cost_type",
-                           "amount", "paid_by", "source_file", "loaded_on"]),
 }
 
 
@@ -126,6 +122,25 @@ class Databank:
 
     def execute(self, sql: str, params: tuple = ()) -> list:
         return self.con.execute(sql, params).fetchall()
+
+    def replace_report(self, table: str, df: pd.DataFrame, keys: list[str]) -> tuple[int, int]:
+        """Report-style load: rows for the same week (+ category etc.) are replaced as a block.
+
+        Transport reports have no per-row id, so a re-sent report replaces that
+        week's report instead of adding to it."""
+        if df.empty:
+            return 0, 0
+        cur = self.con.cursor()
+        replaced = 0
+        for combo in df[keys].drop_duplicates().itertuples(index=False):
+            where = " AND ".join(f"{k} = ?" for k in keys)
+            replaced += cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", tuple(combo)).fetchone()[0]
+            cur.execute(f"DELETE FROM {table} WHERE {where}", tuple(combo))
+        cols = list(df.columns)
+        rows = df.astype(object).where(df.notna(), None).values.tolist()
+        cur.executemany(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", rows)
+        self.con.commit()
+        return len(rows), replaced
 
     # -- logs -------------------------------------------------------------
     def log_issues(self, issues: list[dict]) -> None:

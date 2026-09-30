@@ -19,6 +19,7 @@ from openpyxl import Workbook
 
 from builder import data as D
 from builder.home import build_home, build_placeholder
+from builder.transport import build_calc as build_transport_calc, build_dashboard as build_transport_dashboard
 from builder.wsf import build_calc as build_wsf_calc, build_dashboard as build_wsf_dashboard
 from config import COLOURS, HERE, Paths, load_settings
 from databank import Databank, Masters
@@ -26,10 +27,10 @@ from databank import Databank, Masters
 SHEET_ORDER = [
     "HOME", "MASTER DASHBOARD", "WSF DASHBOARD", "MIDWEEK DASHBOARD", "CHOP DASHBOARD",
     "COMMUNITY CHURCH DASHBOARD", "TRANSPORT DASHBOARD", "AREA SCORECARD", "ZONE SCORECARD", "DATA QUALITY",
-    "DATA_WSF", "WSF_CELLS_CURRENT", "DATA_MIDWEEK", "DATA_CHOP", "DATA_COMMUNITY", "DATA_TRANSPORT_OPS",
-    "DATA_TRANSPORT_FINANCE",
+    "DATA_WSF", "WSF_CELLS_CURRENT", "DATA_MIDWEEK", "DATA_CHOP", "DATA_COMMUNITY", "DATA_TRANSPORT",
+    "DATA_TRANSPORT_COSTS", "DATA_TRANSPORT_BUDGET",
     "MASTER_AREAS", "MASTER_ZONES", "MASTER_CELLS", "MASTER_COMMUNITY", "MASTER_FLEET",
-    "CALENDAR", "SETTINGS", "CALC_LISTS", "CALC_SEARCH", "CALC_WSF",
+    "CALENDAR", "SETTINGS", "CALC_LISTS", "CALC_SEARCH", "CALC_WSF", "CALC_TRANSPORT",
 ]
 
 TABLE_SOURCES = {
@@ -37,8 +38,9 @@ TABLE_SOURCES = {
     "MIDWEEK": ("midweek", ["week_ending", "area", "zone"]),
     "CHOP": ("chop", ["week_ending", "area", "zone"]),
     "COMMUNITY": ("community", ["week_ending", "church", "service_type"]),
-    "TRANSPORT_OPS": ("transport_ops", ["week_ending", "category", "vehicle_id"]),
-    "TRANSPORT_FINANCE": ("transport_fin", ["week_ending", "category", "area", "cost_type"]),
+    "TRANSPORT": ("transport_runs", ["week_ending", "category", "area", "source_row"]),
+    "TRANSPORT_COSTS": ("transport_costs", ["week_ending", "category", "area", "source_row"]),
+    "TRANSPORT_BUDGET": ("transport_budget", ["week_ending", "area_no"]),
 }
 
 PLACEHOLDER_NOTE = ("Stage 2: this dashboard is built after the WSF DASHBOARD is reviewed, using the same control "
@@ -110,7 +112,7 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
     colour_of = {"WSF": "WSF", "MIDWEEK": "MIDWEEK", "CHOP": "CHOP", "COMMUNITY": "COMMUNITY",
-                 "TRANSPORT_OPS": "TRANSPORT", "TRANSPORT_FINANCE": "TRANSPORT"}
+                 "TRANSPORT": "TRANSPORT", "TRANSPORT_COSTS": "TRANSPORT", "TRANSPORT_BUDGET": "TRANSPORT"}
 
     D.write_settings(wb, settings, existing)
     D.write_calendar(wb, settings)
@@ -121,6 +123,8 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
 
     build_wsf_calc(wb, sizes["MASTER_AREAS"])
     build_wsf_dashboard(wb, sizes["MASTER_ZONES"])
+    top = build_transport_calc(wb, sizes["MASTER_AREAS"])
+    build_transport_dashboard(wb, sizes["MASTER_ZONES"], top)
 
     placeholders = [
         ("MASTER DASHBOARD", "MASTER", "Global view of every stream side by side", "all DATA_*"),
@@ -128,8 +132,6 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
         ("CHOP DASHBOARD", "CHOP", "Covenant Hour of Prayer (CHOP zones only)", "DATA_CHOP"),
         ("COMMUNITY CHURCH DASHBOARD", "COMMUNITY", "35 Community Churches · Sunday service first",
          "DATA_COMMUNITY"),
-        ("TRANSPORT DASHBOARD", "TRANSPORT", "Fleet operations, finance and optimisation",
-         "DATA_TRANSPORT_OPS / DATA_TRANSPORT_FINANCE"),
         ("AREA SCORECARD", "MASTER", "One Area across every stream, with rank among all Areas", "DATA_*"),
         ("ZONE SCORECARD", "MASTER", "One Zone across every stream", "DATA_*"),
     ]
@@ -137,9 +139,9 @@ def build(root: Path, out: Path | None = None, empty: bool = False) -> Path:
         build_placeholder(wb, sheet, key, sub, PLACEHOLDER_NOTE.format(data=data_sheet))
     cov, gaps = coverage_and_gaps(tables)
     D.write_data_quality(wb, dq, cov, gaps)
-    build_home(wb, stage_note="Review build (stage 1): the WSF DASHBOARD, the data tables, masters, Calendar, "
-                              "SETTINGS and DATA QUALITY are complete. The other dashboards follow once the WSF "
-                              "layout is approved.")
+    build_home(wb, stage_note="Build in progress: the WSF and TRANSPORT dashboards, data tables, masters, Calendar, "
+                              "SETTINGS and DATA QUALITY are complete. Midweek, CHOP, Community, the scorecards and "
+                              "the Master dashboard follow as their sample files arrive.")
 
     wb._sheets = [wb[name] for name in SHEET_ORDER] + [s for s in wb._sheets if s.title not in SHEET_ORDER]
     wb.active = 0

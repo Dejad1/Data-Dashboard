@@ -24,8 +24,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from config import (ALIASES_FILE, COMMUNITY_SERVICE_TYPES, COST_TYPES, FLEET_CATEGORIES, HIRED_BY_TYPES,
-                    HERE, Paths, load_settings, week_ending)
+import transport_reports
+from config import ALIASES_FILE, COMMUNITY_SERVICE_TYPES, HERE, Paths, load_settings, week_ending
 from databank import Databank, Masters, norm_key, yes
 
 COUNT_FIELDS = ["male", "female", "children"]
@@ -105,18 +105,10 @@ def hint_from_text(text: str) -> str | None:
         return "COMMUNITY"
     if "wsf" in t or "saturday" in t:
         return "WSF"
-    if "finance" in t or "expense" in t or "cost" in t:
-        return "TRANSPORT_FINANCE"
-    if "transport" in t or "fleet" in t or "bus" in t:
-        return "TRANSPORT_OPS"
     return None
 
 
 def detect_stream(fields: set[str], file_name: str, sheet: str) -> str | None:
-    if "cost_type" in fields and "amount" in fields:
-        return "TRANSPORT_FINANCE"
-    if "vehicle_id" in fields and ({"trips", "ridership"} & fields):
-        return "TRANSPORT_OPS"
     if "church" in fields:
         return "COMMUNITY"
     if "cell" in fields or {"cells_total", "cells_reported"} <= fields:
@@ -371,106 +363,12 @@ def normalise_community(b: Batch, m: Masters, settings, cal) -> pd.DataFrame:
     return dedupe_in_file(b, out, ["week_ending", "church", "service_type"])
 
 
-def category_of(v) -> str | None:
-    t = squash(v)
-    if not t:
-        return None
-    for key, cat in [("wsf", "WSF Procured"), ("hire", "WSF Procured"), ("coaster", "Church Coaster"),
-                     ("electric", "Electric Bus"), ("big", "Big Bus"), ("ft", "FT Procured"),
-                     ("lt", "FT Procured")]:
-        if key in t:
-            return cat
-    return None
-
-
-def normalise_transport_ops(b: Batch, m: Masters, settings, cal) -> pd.DataFrame:
-    common_checks(b, settings, *cal, ["trips", "ridership"])
-    df = b.df
-    df["vehicle_raw"] = df["vehicle_id"].astype(str)
-    df["vehicle_id"] = match(df["vehicle_id"], m.vehicle_by_key)
-    b.reject(df["vehicle_id"].isna(), "Unknown vehicle (not in MASTER_FLEET)")
-    fleet = df["vehicle_id"].map(lambda v: m.vehicle.get(v, {}))
-    master_cat = fleet.map(lambda f: f.get("Category"))
-    if "category" in df:
-        given = df["category"].map(category_of)
-        diff = df["vehicle_id"].notna() & given.notna() & (given != master_cat)
-        b.warn(diff & (b.reasons == ""), "Category does not match fleet master",
-               lambda r: f"file says '{r['category']}' for {r['vehicle_id']}; master category used")
-    df["category"] = master_cat
-    for f, master_col in (("area", "Area_Name"), ("zone", "Zone_Name"), ("hired_by_type", "Hired_By_Type")):
-        master_val = fleet.map(lambda x, c=master_col: x.get(c, ""))
-        if f in df:
-            given = df[f].astype(object).map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip())
-            if f == "area":
-                given = given.map(lambda v: m.area_by_key.get(norm_key(v), v) if v else "")
-            elif f == "zone":
-                given = given.map(lambda v: m.zone_by_key.get(norm_key(v), v) if v else "")
-            elif f == "hired_by_type":
-                given = given.map(lambda v: next((h for h in HIRED_BY_TYPES if h.lower() == v.lower()), "") if v else "")
-            df[f] = given.where(given != "", master_val)
-        else:
-            df[f] = master_val
-    if "operational" in df:
-        df["operational"] = df["operational"].map(lambda v: "Y" if yes(v) or str(v).strip().lower() in {"op", "running"} else "N")
-    else:
-        df["operational"] = np.where(df["trips"] > 0, "Y", "N")
-    b.warn((df["operational"] == "N") & (df["ridership"] > 0) & (b.reasons == ""),
-           "Riders on a non-operational bus", lambda r: f"{r['vehicle_id']} marked not operational but carried {r['ridership']}")
-    out = b.accepted()
-    return dedupe_in_file(b, out, ["week_ending", "vehicle_id"])
-
-
-def normalise_transport_fin(b: Batch, m: Masters, settings, cal) -> pd.DataFrame:
-    common_checks(b, settings, *cal, [])
-    df = b.df
-    amt = to_number(df["amount"])
-    b.reject(amt.isna(), "Amount is not a number")
-    b.reject(amt < 0, "Amount is negative")
-    df["amount"] = amt.fillna(0).clip(lower=0).round(2)
-    df["category"] = df["category"].map(category_of) if "category" in df else None
-    b.reject(df["category"].isna(), "Fleet category missing or not recognised")
-
-    def ctype(v):
-        t = squash(v)
-        for c in COST_TYPES:
-            if squash(c) == t:
-                return c
-        for key, c in [("fuel", "Fuel"), ("diesel", "Fuel"), ("hire", "Hire Fee"), ("maint", "Maintenance"),
-                       ("repair", "Maintenance"), ("driver", "Driver Allowance"), ("allow", "Driver Allowance"),
-                       ("member", "Member Payment")]:
-            if key in t:
-                return c
-        return str(v).strip().title() if t else None
-
-    df["cost_type"] = df["cost_type"].map(ctype)
-    b.reject(df["cost_type"].isna(), "Cost type missing")
-    known = set(COST_TYPES)
-    b.warn(df["cost_type"].notna() & ~df["cost_type"].isin(known) & (b.reasons == ""), "New cost type",
-           lambda r: f"'{r['cost_type']}' is not in the standard list; loaded as its own cost type")
-    area_raw = df["area"].astype(object).map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip()) if "area" in df else pd.Series("", index=df.index)
-    df["area"] = area_raw.map(lambda v: "Central" if v == "" or v.lower() == "central" else m.area_by_key.get(norm_key(v)))
-    b.reject(df["area"].isna(), "Unknown Area (not in MASTER_AREAS)")
-    zone_raw = df["zone"].astype(object).map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip()) if "zone" in df else pd.Series("", index=df.index)
-    df["zone"] = zone_raw.map(lambda v: "" if v == "" else m.zone_by_key.get(norm_key(v)))
-    b.reject(df["zone"].isna(), "Unknown Zone (not in MASTER_ZONES)")
-    default_payer = {k: v[2].split(" ")[0] for k, v in FLEET_CATEGORIES.items()}
-    if "paid_by" in df:
-        pb = df["paid_by"].astype(object).map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip().title())
-        df["paid_by"] = pb.where(pb != "", df["category"].map(default_payer))
-    else:
-        df["paid_by"] = df["category"].map(default_payer)
-    out = b.accepted()
-    return dedupe_in_file(b, out, ["week_ending", "category", "area", "zone", "cost_type"])
-
-
 NORMALISERS = {
     "WSF_CELLS": normalise_wsf_cells,
     "WSF_ZONE": normalise_wsf_zone,
     "MIDWEEK": normalise_zonal,
     "CHOP": normalise_zonal,
     "COMMUNITY": normalise_community,
-    "TRANSPORT_OPS": normalise_transport_ops,
-    "TRANSPORT_FINANCE": normalise_transport_fin,
 }
 
 # --------------------------------------------------------------------------
@@ -541,11 +439,64 @@ def split_zonal_mixed(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         {"UNKNOWN": df[~s.isin(["MIDWEEK", "CHOP", "WSF"])].copy()} if (~s.isin(["MIDWEEK", "CHOP", "WSF"])).any() else {})
 
 
+TRANSPORT_TABLES = {
+    # a re-sent report replaces the same report for the same week
+    "transport_runs": (transport_reports.RUN_COLS, ["week_ending", "report"]),
+    "transport_costs": (transport_reports.COST_COLS, ["week_ending", "report"]),
+    "transport_budget": (transport_reports.BUDGET_COLS, ["week_ending", "report"]),
+}
+
+
+def load_transport_report(report, db: Databank, file_name: str, sheet: str, settings, loaded_on: str,
+                          summary: dict) -> None:
+    """Load one transport report sheet; a re-sent report replaces that week's rows for the category."""
+    label = f"TRANSPORT {report.layout}"
+    issues = [dict(i, logged_on=loaded_on, source_file=file_name, sheet=sheet, stream=label) for i in report.issues]
+    if report.table is None:
+        db.log_issues([{"logged_on": loaded_on, "source_file": file_name, "sheet": sheet, "source_row": None,
+                        "stream": label, "severity": "Info", "issue": "Reference sheet, not loaded",
+                        "detail": "Recognised as a reference/summary sheet; nothing to load weekly"}])
+        return
+    if report.report_date is None:
+        db.log_issues(issues)
+        summary.setdefault(label, [0, 0, 0])[2] += len(report.rows)
+        return
+    cols, keys = TRANSPORT_TABLES[report.table]
+    df = report.frame(cols)
+    we = week_ending(report.report_date, settings["week_end_day"]).isoformat()
+    df["week_ending"] = we
+    df["report_date"] = report.report_date.isoformat()
+    df["source_file"] = file_name
+    df["loaded_on"] = loaded_on
+    for i in issues:
+        i["week_ending"] = we
+    for label_, file_total, loaded_total in report.checks:
+        if file_total is not None and loaded_total is not None and abs(float(file_total) - float(loaded_total)) > 0.5:
+            issues.append({"logged_on": loaded_on, "source_file": file_name, "sheet": sheet, "source_row": None,
+                           "stream": label, "severity": "Warning", "issue": "File total differs from its rows",
+                           "detail": f"{label_}: file says {file_total:,.0f}, rows add up to {loaded_total:,.0f}",
+                           "week_ending": we})
+    loaded, replaced = db.replace_report(report.table, df, keys)
+    rejected = sum(1 for i in issues if i["severity"] == "Rejected")
+    db.log_issues(issues)
+    db.log_load(loaded_on=loaded_on, source_file=file_name, sheet=sheet, stream=label, rows_loaded=loaded,
+                rows_replaced=replaced, rows_rejected=rejected)
+    s = summary.setdefault(label, [0, 0, 0])
+    s[0] += loaded
+    s[1] += replaced
+    s[2] += rejected
+
+
 def process_file(path: Path, db: Databank, m: Masters, settings, aliases, loaded_on: str, summary: dict,
                  wsf_weeks: set) -> bool:
     cal = calendar_range(settings)
     recognised = False
     for sheet, raw in read_sheets(path):
+        report = transport_reports.read(raw, sheet, path.name, m, settings)
+        if report is not None:
+            load_transport_report(report, db, path.name, sheet, settings, loaded_on, summary)
+            recognised = True
+            continue
         hdr, mapping = find_header(raw, aliases)
         if hdr is None:
             continue

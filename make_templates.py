@@ -2,6 +2,10 @@
 
     python make_templates.py
 
+Transport has no template here: ingest.py reads the transport office's own weekly
+reports (FT Procured, FT Coasters, TATA EV, WSF Procured, coaster fuelling and
+the FT allocation) exactly as they are sent.
+
 Each template has the exact headers ingest.py expects on the first sheet and a
 "How to fill" sheet with a legend and one example row.  (Other layouts also
 work: ingest.py matches columns by name, in any order, below title rows.)
@@ -31,15 +35,6 @@ TEMPLATES = {
     "Community_Church": ("Community", ["Date", "Church", "Service_Type", "Male", "Female", "Children"],
                          ["28/09/2026", "Community Church Abuja", "Sunday", 150, 210, 95],
                          "Service_Type is Sunday, WSF, Midweek or CHOP. Never mixed into zone totals."),
-    "Transport_Operations": ("Transport", ["Date", "Vehicle_ID", "Category", "Area", "Zone", "Hired_By_Type", "Trips",
-                                           "Ridership", "Operational"],
-                             ["27/09/2026", "LT-0001", "FT Procured", "Ikeja", "Ikeja Zone 03", "", 4, 70, "Y"],
-                             "One row per vehicle per week. Category/Area/Zone default from MASTER_FLEET if blank. "
-                             "Hired_By_Type (Area, Zone or Individual) is for WSF Procured vehicles."),
-    "Transport_Finance": ("Transport finance", ["Date", "Category", "Area", "Zone", "Cost_Type", "Amount", "Paid_By"],
-                          ["27/09/2026", "Church Coaster", "Ikeja", "", "Fuel", 145000, "Central"],
-                          "Cost_Type: Fuel, Hire Fee, Maintenance, Driver Allowance, Member Payment, Other. "
-                          "Leave Area blank for central costs. Amount in NGN."),
 }
 
 

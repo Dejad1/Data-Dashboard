@@ -76,6 +76,12 @@ DEFAULT_SETTINGS = {
     # First week-ending date the Calendar sheet covers, and how many years
     "calendar_start_year": 2024,
     "calendar_years": 7,
+    # Seats per bus per trip, used where a transport report gives no capacity
+    "cap_lt": 22,
+    "cap_coaster": 30,
+    "cap_electric": 70,
+    "cap_tata": 70,
+    "cap_hiace": 14,
 }
 
 
@@ -102,15 +108,16 @@ def week_ending(d: dt.date, week_end_day: int) -> dt.date:
 # Streams
 # --------------------------------------------------------------------------
 
-STREAMS = ["WSF", "MIDWEEK", "CHOP", "COMMUNITY", "TRANSPORT_OPS", "TRANSPORT_FINANCE"]
+STREAMS = ["WSF", "MIDWEEK", "CHOP", "COMMUNITY", "TRANSPORT", "TRANSPORT_COSTS", "TRANSPORT_BUDGET"]
 
 STREAM_LABELS = {
     "WSF": "WSF",
     "MIDWEEK": "Midweek",
     "CHOP": "CHOP",
     "COMMUNITY": "Community Church",
-    "TRANSPORT_OPS": "Transport (operations)",
-    "TRANSPORT_FINANCE": "Transport (finance)",
+    "TRANSPORT": "Transport (bus runs)",
+    "TRANSPORT_COSTS": "Transport (coaster fuel)",
+    "TRANSPORT_BUDGET": "Transport (FT budget)",
 }
 
 COMMUNITY_SERVICE_TYPES = ["Sunday", "WSF", "Midweek", "CHOP"]
@@ -130,17 +137,4 @@ COLOURS = {
 # Transport
 # --------------------------------------------------------------------------
 
-FLEET_CATEGORIES = {
-    # category: (default capacity per trip, owner, who pays)
-    "FT Procured": (22, "Central", "Central"),
-    "Church Coaster": (30, "Church", "Central (fuel)"),
-    "Electric Bus": (70, "Church", "Church"),
-    "Big Bus": (70, "Church", "Church"),
-    "WSF Procured": (None, "Hired", "Members"),
-}
-
-HIRED_BY_TYPES = ["Area", "Zone", "Individual"]
-
-COST_TYPES = ["Fuel", "Hire Fee", "Maintenance", "Driver Allowance", "Member Payment", "Other"]
-
-PAID_BY = ["Central", "Church", "Area", "Zone", "Members", "Individual"]
+TRANSPORT_CATEGORIES = ["FT Procured", "Church Coaster", "EV/TATA", "WSF Procured", "Hiace"]

@@ -83,27 +83,60 @@ SPECS = {
     "COMMUNITY": TableSpec("DATA_COMMUNITY", "tblCommunity",
                            attendance_cols([Column("Church", "church", width=30),
                                             Column("Service_Type", "service_type", width=12)]) + AUDIT),
-    "TRANSPORT_OPS": TableSpec("DATA_TRANSPORT_OPS", "tblTransportOps", [
+    "TRANSPORT": TableSpec("DATA_TRANSPORT", "tblTransport", [
         Column("Week_Ending", formula=WEEK_ENDING_F, fmt=FMT_DATE, width=13, kind="date"),
         Column("Report_Date", "report_date", fmt=FMT_DATE, width=13, kind="date"),
-        Column("Category", "category", width=15), Column("Vehicle_ID", "vehicle_id", width=11),
-        Column("Area", "area", width=18), Column("Zone", "zone", width=24),
-        Column("Hired_By_Type", "hired_by_type", width=13),
-        Column("Trips", "trips", fmt=FMT_INT0, width=8, kind="int"),
-        Column("Ridership", "ridership", fmt=FMT_INT0, width=10, kind="int"),
-        Column("Operational", "operational", width=11),
-        Column("Capacity", formula='=IF({Vehicle_ID}{r}="","",IFERROR(INDEX(MASTER_FLEET!$C:$C,'
-                                   'MATCH({Vehicle_ID}{r},MASTER_FLEET!$A:$A,0)),0))', fmt=FMT_INT0, width=9),
-        Column("Seats_Offered", formula='=IF({Vehicle_ID}{r}="","",IF({Operational}{r}="Y",{Capacity}{r}*{Trips}{r},0))',
-               fmt=FMT_INT0, width=12),
+        Column("Category", "category", width=15), Column("Vehicle_Type", "vehicle_type", width=15),
+        Column("Area", "area", width=18), Column("Zone_Code", "zone_code", width=10),
+        Column("Location", "location", width=30), Column("Vehicle_ID", "vehicle_id", width=11),
+        Column("Buses", "buses", fmt=FMT_INT0, width=7, kind="int"),
+        Column("Capacity", "capacity", fmt=FMT_INT0, width=9, kind="num"),
+        Column("Trips", "trips", fmt=FMT_INT0, width=7, kind="int"),
+        Column("Seats_Offered", formula='=IF(OR({Capacity}{r}="",{Capacity}{r}=0),"",IF({Status}{r}="Ran",'
+                                        '{Capacity}{r}*MAX(1,{Trips}{r}),0))', fmt=FMT_INT0, width=12),
+        Column("Male", "male", fmt=FMT_INT0, width=8, kind="int"),
+        Column("Female", "female", fmt=FMT_INT0, width=8, kind="int"),
+        Column("Adult_Total", formula=ADULT_F, fmt=FMT_INT0, width=11),
+        Column("Children", "children", fmt=FMT_INT0, width=9, kind="int"),
+        Column("Grand_Total", formula=GRAND_F, fmt=FMT_INT0, width=11),
+        Column("Riders_With_Seats", formula='=IF({Seats_Offered}{r}="","",{Grand_Total}{r})', fmt=FMT_INT0,
+               width=11),
+        Column("Cost", "cost", fmt=FMT_NGN, width=12, kind="num"),
+        Column("Paid_By", "paid_by", width=10), Column("Status", "status", width=18),
+        Column("Service", "service", width=18), Column("Remarks_Category", "remarks_category", width=16),
+        Column("Remarks", "remarks", width=30), Column("In_Church", "in_church", width=9),
+        *AUDIT,
+        # criteria key: blank zone codes (coasters, EV) become "-" so a "*" wildcard still matches them
+        Column("Zone_Key", formula='=IF({Zone_Code}{r}="","-",{Zone_Code}{r})', width=9),
+        # row number when this row is a breakdown / demand note inside the TRANSPORT DASHBOARD filter
+        Column("Note_Helper", formula='=IF(AND({Week_Ending}{r}=CALC_TRANSPORT!$B$10,'
+                                      'OR(CALC_TRANSPORT!$B$6="*",{Area}{r}=CALC_TRANSPORT!$B$6),'
+                                      'OR(CALC_TRANSPORT!$B$7="*",{Zone_Code}{r}=CALC_TRANSPORT!$B$7),'
+                                      'OR({Status}{r}="Breakdown",{Remarks_Category}{r}="Extra passengers",'
+                                      'ISNUMBER(SEARCH("more bus",{Remarks}{r})))),ROW(),"")', width=10),
+        ]),
+    "TRANSPORT_COSTS": TableSpec("DATA_TRANSPORT_COSTS", "tblTransportCosts", [
+        Column("Week_Ending", formula=WEEK_ENDING_F, fmt=FMT_DATE, width=13, kind="date"),
+        Column("Report_Date", "report_date", fmt=FMT_DATE, width=13, kind="date"),
+        Column("Category", "category", width=15), Column("Area", "area", width=18),
+        Column("Vehicle_ID", "vehicle_id", width=11), Column("Cost_Type", "cost_type", width=10),
+        Column("Hub_Status", "hub_status", width=10), Column("Trips", "trips", fmt=FMT_INT0, width=7, kind="num"),
+        Column("Litres", "quantity", fmt=FMT_INT0, width=8, kind="num"),
+        Column("Unit_Price", "unit_price", fmt=FMT_NGN, width=10, kind="num"),
+        Column("Amount", "amount", fmt=FMT_NGN, width=12, kind="num"),
+        Column("Payable", "payable", width=8),
+        Column("Paid_Amount", formula='=IF({Payable}{r}="Y",{Amount}{r},0)', fmt=FMT_NGN, width=12),
+        Column("Paid_By", "paid_by", width=10),
         *AUDIT]),
-    "TRANSPORT_FINANCE": TableSpec("DATA_TRANSPORT_FINANCE", "tblTransportFinance", [
+    "TRANSPORT_BUDGET": TableSpec("DATA_TRANSPORT_BUDGET", "tblTransportBudget", [
         Column("Week_Ending", formula=WEEK_ENDING_F, fmt=FMT_DATE, width=13, kind="date"),
         Column("Report_Date", "report_date", fmt=FMT_DATE, width=13, kind="date"),
-        Column("Category", "category", width=15), Column("Area", "area", width=18), Column("Zone", "zone", width=24),
-        Column("Cost_Type", "cost_type", width=16),
-        Column("Amount", "amount", fmt=FMT_NGN, width=13, kind="num"),
-        Column("Paid_By", "paid_by", width=11),
+        Column("Area_No", "area_no", fmt=FMT_INT0, width=8, kind="int"), Column("Area", "area", width=18),
+        Column("Buses_Allocated", "buses_allocated", fmt=FMT_INT0, width=10, kind="int"),
+        Column("Cost_Per_Bus", "cost_per_bus", fmt=FMT_NGN, width=12, kind="num"),
+        Column("Expected_Spend", formula='=IF({Area}{r}="","",{Buses_Allocated}{r}*{Cost_Per_Bus}{r})',
+               fmt=FMT_NGN, width=14),
+        Column("Payable_This_Week", "payable_this_week", fmt=FMT_NGN, width=14, kind="num"),
         *AUDIT]),
 }
 

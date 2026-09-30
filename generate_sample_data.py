@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import FLEET_CATEGORIES, Paths, load_settings, week_ending
+from config import HERE, Paths, load_settings, week_ending
 
 AREA_PLACES = """Ikeja Ikorodu Agege Alimosho Surulere Yaba Mushin Oshodi Isolo Ejigbo Ikotun Igando Idimu Egbeda
 Ipaja Ayobo Abule-Egba Iyana-Ipaja Ogba Ojodu Berger Magodo Ketu Mile-12 Ojota Maryland Gbagada Bariga Shomolu
@@ -32,22 +32,30 @@ Makurdi Lokoja Minna Bauchi Maiduguri Yola Sokoto Zaria Katsina Gombe Jalingo La
 Yenagoa Ado-Ekiti Ogbomosho Oyo Ondo Ilesha-East""".split()
 
 
+def base_areas(n_areas: int) -> list[dict]:
+    """The real Area list from masters/MASTER_AREAS.csv when present, else invented names."""
+    real = HERE / "masters" / "MASTER_AREAS.csv"
+    if real.exists():
+        df = pd.read_csv(real, dtype=str, keep_default_na=False)
+        if len(df) >= n_areas and "Area_No" in df:
+            return df.head(n_areas).to_dict("records")
+    return [{"Area_ID": f"A{i + 1:02d}", "Area_Name": AREA_PLACES[i].replace("-", " ").upper(), "Active": "Y",
+             "Area_No": str(i + 1), "Aliases": ""} for i in range(n_areas)]
+
+
 def build_masters(rng: random.Random, scale: float = 1.0):
     n_areas = max(3, round(92 * scale))
     target_zones, target_cells = 1250 * scale, 16000 * scale
-    areas = [{"Area_ID": f"A{i + 1:03d}", "Area_Name": AREA_PLACES[i].replace("-", " "), "Active": "Y"}
-             for i in range(n_areas)]
-    # spread zones unevenly across areas (big areas have more zones)
+    areas = base_areas(n_areas)
+    # spread zones unevenly across areas (big areas have more zones); zones use the LFC<area><zone> codes
     weights = np.array([rng.uniform(0.5, 1.8) for _ in areas])
     per_area = np.maximum(5, np.round(weights / weights.sum() * target_zones)).astype(int)
     zones = []
     for a, n in zip(areas, per_area):
         for z in range(n):
-            zones.append({"Zone_ID": f"{a['Area_ID']}-Z{z + 1:02d}",
-                          "Zone_Name": f"{a['Area_Name']} Zone {z + 1:02d}",
-                          "Area_Name": a["Area_Name"],
-                          "Has_CHOP": "Y" if rng.random() < 0.6 else "N",
-                          "Active": "Y"})
+            code = f"LFC{int(a['Area_No']):02d}{z + 1:02d}"
+            zones.append({"Zone_ID": code, "Zone_Name": code, "Area_Name": a["Area_Name"],
+                          "Has_CHOP": "Y" if rng.random() < 0.6 else "N", "Active": "Y"})
     cells_per_zone = target_cells / len(zones)
     cells = []
     for z in zones:
@@ -58,21 +66,10 @@ def build_masters(rng: random.Random, scale: float = 1.0):
     community = [{"Church_ID": f"CC{i + 1:02d}", "Church_Name": f"Community Church {p.replace('-', ' ')}",
                   "Location": p.replace("-", " "), "Active": "Y"} for i, p in enumerate(COMMUNITY_PLACES)]
     fleet = []
-    counts = {k: max(2, round(v * scale)) for k, v in
-              {"FT Procured": 1200, "Church Coaster": 216, "Electric Bus": 50, "Big Bus": 20,
-               "WSF Procured": 160}.items()}
-    prefix = {"FT Procured": "LT", "Church Coaster": "CST", "Electric Bus": "EB", "Big Bus": "BB",
-              "WSF Procured": "WP"}
-    for cat, n in counts.items():
-        cap, owner, _ = FLEET_CATEGORIES[cat]
-        for i in range(n):
-            z = rng.choice(zones)
-            hired = rng.choice(["Area", "Zone", "Individual"]) if cat == "WSF Procured" else ""
-            fleet.append({"Vehicle_ID": f"{prefix[cat]}-{i + 1:04d}", "Category": cat,
-                          "Capacity": cap if cap else rng.choice([14, 18, 26, 30, 33]),
-                          "Owner": owner, "Status": "Active" if rng.random() > 0.03 else "Retired",
-                          "Area_Name": z["Area_Name"], "Zone_Name": "" if hired == "Area" else z["Zone_Name"],
-                          "Hired_By_Type": hired})
+    for i in range(max(4, round(216 * scale))):
+        a = rng.choice(areas)
+        fleet.append({"Vehicle_ID": str(i + 1), "Category": "Church Coaster", "Capacity": 30, "Owner": "Church",
+                      "Status": "Active", "Area_Name": a["Area_Name"], "Zone_Name": "", "Hired_By_Type": ""})
     return [pd.DataFrame(x) for x in (areas, zones, cells, community, fleet)]
 
 
@@ -125,7 +122,6 @@ def generate(root: Path, n_weeks=26, seed=7, today: dt.date | None = None, scale
     area_report_bias = {a: rng.uniform(0.0, 0.15) for a in areas["Area_Name"]}
     op_cells = cells[cells["Operational"] == "Y"].merge(zones[["Zone_Name", "Area_Name"]], on="Zone_Name")
     chop_zones = zones[zones["Has_CHOP"] == "Y"]
-    active_fleet = fleet[fleet["Status"] == "Active"].reset_index(drop=True)
     header_variants = [
         {"male": "Male", "female": "Female", "children": "Children"},
         {"male": "MEN", "female": "WOMEN", "children": "Kids"},
@@ -206,47 +202,159 @@ def generate(root: Path, n_weeks=26, seed=7, today: dt.date | None = None, scale
         write_messy(pd.DataFrame(rows), paths.inbox / f"Community Churches {we:%Y-%m-%d}", rng,
                     sheet="All services", title="COMMUNITY CHURCHES - WEEKLY RETURNS")
 
-        # ---- Transport operations --------------------------------------------
-        f = active_fleet
-        op = nrng.random(len(f)) > np.where(f["Category"] == "Church Coaster", 0.12, 0.07)
-        trips = np.where(op, nrng.integers(1, 5, len(f)) * np.where(f["Category"] == "WSF Procured", 1, 2), 0)
-        util = np.clip(nrng.normal(0.72, 0.18, len(f)), 0.15, 1.15)
-        util = np.where(f["Category"] == "Church Coaster", util * 0.8, util)
-        ridership = np.round(f["Capacity"].astype(int).to_numpy() * trips * util).astype(int)
-        ops = pd.DataFrame({"Week Ending": fmt_date(we, wi), "Bus ID": f["Vehicle_ID"], "Bus Type": f["Category"],
-                            "Area": f["Area_Name"], "Zone": f["Zone_Name"], "Trips": trips,
-                            "Riders Carried": ridership, "Operational": np.where(op, "Yes", "No")})
-        if wi == n_weeks - 1:
-            ops.loc[0, "Bus ID"] = "LT-9999"                                    # unknown vehicle
-        write_messy(ops, paths.inbox / f"Transport ops {we:%Y-%m-%d}", rng, sheet="Fleet")
-
-        # ---- Transport finance --------------------------------------------------
-        fin = []
-        by_area = f.assign(op=op, trips=trips, riders=ridership).groupby(["Area_Name", "Category"])
-        for (area, cat), g in by_area:
-            buses, t = int(g["op"].sum()), int(g["trips"].sum())
-            if buses == 0:
-                continue
-            if cat in ("FT Procured", "Church Coaster", "Electric Bus", "Big Bus"):
-                fuel_rate = {"FT Procured": 9500, "Church Coaster": 14000, "Electric Bus": 2500, "Big Bus": 26000}[cat]
-                fin.append((cat, area, "Fuel", t * fuel_rate * rng.uniform(0.9, 1.1),
-                            "Central" if cat in ("FT Procured", "Church Coaster") else "Church"))
-                fin.append((cat, area, "Driver Allowance", buses * 5000, "Central" if cat == "FT Procured" else "Church"))
-                if rng.random() < 0.35:
-                    fin.append((cat, area, "Maintenance", buses * rng.uniform(8000, 60000), "Church"))
-            else:
-                fee = int(g["riders"].sum()) * rng.uniform(300, 500)
-                fin.append((cat, area, "Hire Fee", fee, "Members"))
-                fin.append((cat, area, "Member Payment", fee * rng.uniform(0.92, 1.0), "Members"))
-        fdf = pd.DataFrame(fin, columns=["Category", "Area", "Cost Type", "Amount (NGN)", "Paid By"])
-        fdf["Amount (NGN)"] = fdf["Amount (NGN)"].round(0)
-        fdf.insert(0, "Date", fmt_date(sun, wi))
-        fdf.insert(3, "Zone", "")
-        write_messy(fdf, paths.inbox / f"Transport finance {we:%Y-%m-%d}", rng, sheet="Expenses",
-                    title="TRANSPORT EXPENDITURE" if wi % 2 else None)
+        # ---- Transport: the transport office's own report layouts -------------
+        write_transport_week(paths, we, wi, n_weeks, areas, zones, fleet, rng, nrng, s)
 
     return {"areas": len(areas), "zones": len(zones), "cells": len(cells), "chop_zones": len(chop_zones),
             "community": len(community), "fleet": len(fleet), "weeks": [weeks[0], weeks[-1]]}
+
+
+FT_HEADERS = ["AREA NO", "AREA NAME", "LOADING BAY FULL ADDRESSES FOR LOCATIONS THAT NEEDS ADDITIONAL BUSES",
+              "ZINCODE", "NO. OF ADDITIONAL BUSES NEEDED TO COMPLIMENT THE AREA BUSES AVAILABLE AT YOUR AREA FOR "
+              "SUNDAY SERVICES", "CAPACITY OF ADDITIONAL BUSES APPROVED (22-SEATER LT)", "ONGOING SERVICE AT ARRIVAL",
+              "NUMBER OF BUSES APPROVED", "APPROVED COST", "CAPACITY", "NUMBER OF BUSES IN CHURCH",
+              "TOTAL SPENT PER AREA ", "SIGHTED BUSES AMOUNT", "TOTAL SPENT PER AREA ", "MALE", "FEMALE", "CHILDREN",
+              "TOTAL", "TOTAL SPENT PER AREA ", "BUS OPTIMIZATION", "UTILIZATION",
+              "REMARKS (PAID BEFORE SERVICE/ NOT PAID BEFORE SERVICE)", "TOTAL FULL UTILIZATION", "TOTAL UNDERUTILIZED"]
+COASTER_HEADERS = ["S/N", "HUB LOCATIONS", "FT-HUB HOST AREA", "BUS PARKING STATION (AREA FACILITY)",
+                   "BUS TAG NUMBER", "BUS", "CAPACITY FULLY UTILIZED", "NUMBER OF TRIPS",
+                   "MALE (for multiple trips, pls sum up all trips)", "FEMALE (for multiple trips, pls sum up all trips)",
+                   "CHILDREN (for multiple trips, pls sum up all trips)", "TOTAL",
+                   "SERVICE ATTENDED (for multiple trips, please select all services)", "OPERATIONAL REMARKS (category)",
+                   "OPERATIONAL REMARKS (details here)"]
+EV_HEADERS = ["S/N", "HUB LOCATIONS", "FT-HUB HOST AREA", "BUS PARKING STATION (AREA FACILITY)", "MALE", "FEMALE",
+              "CHILDREN", "ADULT TOTAL", "TOTAL", "SERVICE ATTENDED", "REMARKS"]
+FUEL_HEADERS = ["S/N", "HUB (EXACT ADDRESS) LOCATIONS", "FT-HUB HOST AREA", "HUB STATUS", "TOTAL TRIPS", "AREA NUMBER",
+                "BUS SERIAL NUMBER", "COASTER REGISTRATION NUMBER", "MISSION PASTOR NAME",
+                "DISTANCE TO CANAANLAND (KM)", "FUEL LITRES PER TO & FRO TRIP", "EXTRA TRIP (NOT USED)",
+                "TOTAL PAYABLE FUEL LITRES", "PUMP PRICE (₦/L)", "TOTAL PAYABLE FUEL AMOUNT (₦)"]
+SERVICES = ["1ST SERVICE", "2ND SERVICE", "3RD SERVICE", "2ND SERVICE, 3RD SERVICE"]
+
+
+def _spelling(area: dict, rng) -> str:
+    """Report spelling of an Area: usually the master name, sometimes one of its aliases."""
+    aliases = [a for a in str(area.get("Aliases", "")).split(";") if a.strip()]
+    return rng.choice(aliases) if aliases and rng.random() < 0.3 else area["Area_Name"]
+
+
+def _messy_zone(code: str, rng) -> str:
+    n = code[3:]
+    return rng.choice([code, code.lower(), f"LFC {n}", n.lstrip("0"), code])
+
+
+def write_transport_week(paths, we, wi, n_weeks, areas, zones, fleet, rng, nrng, season):
+    title_date = f"{we.day}th Sept, {we.year}" if we.month == 9 else we.strftime("%d %B %Y")
+    last = wi == n_weeks - 1
+    zones_by_area = zones.groupby("Area_Name")["Zone_ID"].apply(list).to_dict()
+
+    # FT Procured: an Area-total row, then one row per hired bus
+    ft_rows, alloc = [], []
+    for a in areas.to_dict("records"):
+        no = int(a["Area_No"])
+        allocated = rng.randint(4, 20)
+        cost_bus = rng.choice([18000, 30000, 40000, 45000, 50000, 55000, 60000, 130000])
+        alloc.append((no, a["Area_Name"], allocated, cost_bus))
+        n_bus = max(1, int(allocated * rng.uniform(0.55, 1.0)))
+        buses = []
+        for _ in range(n_bus):
+            cap = rng.choice([22, 22, 22, 18, 14, 30, 7])
+            riders = int(min(cap * 1.1, max(3, nrng.normal(cap * 0.95 * season, 3))))
+            m_, f_ = int(riders * 0.38), int(riders * 0.45)
+            buses.append([no, _spelling(a, rng), "", _messy_zone(rng.choice(zones_by_area[a["Area_Name"]]), rng),
+                          None, cap, None, None, None, cap, 1 if cap >= 14 else None, None,
+                          int(cost_bus * cap / 22 / 1000) * 1000, None, m_, f_, riders - m_ - f_, riders, None,
+                          min(1, riders / cap), "Full Utilization" if riders >= cap else "Underutilized",
+                          None, None, None])
+        in_church = sum(1 for b in buses if b[10])
+        ft_rows.append([no, a["Area_Name"], "AREA FACILITY", rng.choice(zones_by_area[a["Area_Name"]]), None, None,
+                        None, None, None, None, None, in_church, None, sum(b[12] for b in buses), None, None, None, 0,
+                        sum(b[17] for b in buses), "#DIV/0!", "#DIV/0!", None, None, None])
+        ft_rows.extend(buses)
+    if last:
+        ft_rows[1][16] = f"{ft_rows[1][16]}$"                 # messy number
+        ft_rows.append([99, "NOWHERE AREA", "", "LFC9901", None, 22, None, None, None, 22, 1, None, 40000, None,
+                        5, 6, 7, 18, None, None, None, None, None, None])
+    ft = pd.DataFrame(ft_rows, columns=FT_HEADERS)
+
+    # Coasters: one row per coaster; a few break down or don't run
+    co_rows, fuel_rows = [], []
+    for k, v in enumerate(fleet.to_dict("records"), start=1):
+        area = areas[areas.Area_Name == v["Area_Name"]].iloc[0].to_dict()
+        state = rng.random()
+        trips = 0 if state < 0.12 else rng.choice([1, 1, 1, 2])
+        riders = [int(nrng.poisson(12 * trips * season)), int(nrng.poisson(14 * trips * season)),
+                  int(nrng.poisson(6 * trips * season))] if trips else [None, None, None]
+        remark = "Breakdown" if 0.04 < state < 0.12 else ("Extra passengers" if rng.random() < 0.15 else
+                                                           "Smooth Operation")
+        co_rows.append([k, "HUB BUS STOP", _spelling(area, rng), area["Area_Name"], int(v["Vehicle_ID"]), 1,
+                        "YES" if trips else None, trips or None, *riders, sum(r or 0 for r in riders) or None,
+                        rng.choice(SERVICES) if trips else None, remark if (trips or remark == "Breakdown") else None,
+                        None])
+        hub = "HUB" if rng.random() < 0.75 else "ZONE"
+        litres_trip = rng.choice([20, 25, 35, 40, 47, 65])
+        price = 1215 + (k - len(fleet) + 3 if last and k > len(fleet) - 3 else 0)   # creeping price, last week
+        fuel_rows.append([k, "HUB", area["Area_Name"], hub, 1 if trips else 0, int(area["Area_No"]), v["Vehicle_ID"],
+                          f"REG{k:03d}", None, litres_trip, litres_trip, litres_trip, litres_trip if trips else 0,
+                          price, (litres_trip if trips else 0) * price])
+    co = pd.DataFrame(co_rows, columns=COASTER_HEADERS)
+    fuel = pd.DataFrame(fuel_rows, columns=FUEL_HEADERS)
+
+    # EV / TATA: area names sit under the "HUB LOCATIONS" header, as in the real sheet
+    ev_rows = []
+    for k in range(1, max(4, round(len(areas) * 0.3)) + 1):
+        a = areas.iloc[k % len(areas)]
+        ran = rng.random() > 0.25
+        mfc = [int(nrng.poisson(25 * season)), int(nrng.poisson(27 * season)), int(nrng.poisson(10 * season))]
+        mfc = mfc if ran else [None, None, None]
+        ev_rows.append([k, a["Area_Name"], "BRT BUS STOP", "CANAANLAND" if k % 4 == 0 else "CAPERNAUM", *mfc,
+                        (mfc[0] or 0) + (mfc[1] or 0), sum(x or 0 for x in mfc),
+                        rng.choice(SERVICES) if ran else None, "SMOOTH OPERATION" if ran else None])
+    ev = pd.DataFrame(ev_rows, columns=EV_HEADERS)
+
+    # WSF Procured: every zone listed; only some hired buses
+    wsf_rows = [[None] * 10 + ["WSF PR"] + [None] * 4,
+                ["WSF PROCURED TRANSPORT REPORT ON ZONAL LOADING BUSES FOR SUNDAY SERVICES"] + [None] * 14,
+                [None, None, None, we.strftime("%dTH %B %Y").upper()] + [None] * 11,
+                ["ZONAL DETAILS"] + [None] * 6 + ["CARRIAGE"] + [None] * 4 + ["COST", "REMARK", None],
+                ["Area No", None, "AREA NAME", None, "ADDRESS LOCATIONS", "TOTAL NO OF BUSES DELIVERED PER ZONE",
+                 "TOTAL CAPACITY OF BUSES PER ZONE ²²", "M", "F", "C", "ADULT TOTAL", "TOTAL", None, None, None]]
+    for z in zones.to_dict("records"):
+        a = areas[areas.Area_Name == z["Area_Name"]].iloc[0]
+        if rng.random() < 0.25:
+            b = rng.choice([1, 1, 2, 3])
+            cap = b * rng.choice([14, 18, 22])
+            mm, ff, cc = int(cap * 0.35), int(cap * 0.45), int(cap * 0.2)
+            wsf_rows.append([int(a["Area_No"]), None, a["Area_Name"], z["Zone_ID"], None, b, cap, mm, ff, cc,
+                             mm + ff, mm + ff + cc, b * 35000, None, None])
+        else:
+            wsf_rows.append([int(a["Area_No"]), None, a["Area_Name"], z["Zone_ID"], None, None, None, None, None, None,
+                             0, 0, None, None, None])
+    body = [r for r in wsf_rows[5:] if r[5]]
+    wsf_rows.append([None, None, None, 0, None, sum(r[5] for r in body), None, sum(r[7] for r in body),
+                     sum(r[8] for r in body), sum(r[9] for r in body), sum(r[10] for r in body),
+                     sum(r[11] for r in body), sum(r[12] for r in body), None, None])
+
+    raw_path = paths.inbox / f"Transport raw reports for {we:%d %b %Y}.xlsx"
+    with pd.ExcelWriter(raw_path, engine="openpyxl") as xw:
+        pd.DataFrame([[f"ELECTRIC BUS - NEW BUSES ({we.strftime('%dTH %B, %Y').upper()})"]]).to_excel(
+            xw, sheet_name="TATA EV REPORT ", index=False, header=False)
+        ev.to_excel(xw, sheet_name="TATA EV REPORT ", index=False, startrow=1)
+        pd.DataFrame([[f"CANAANLAND HUB COASTER BUSES {we.strftime('%dTH %B %Y').upper()}"]]).to_excel(
+            xw, sheet_name="FT COASTERS", index=False, header=False)
+        co.to_excel(xw, sheet_name="FT COASTERS", index=False, startrow=1)
+        pd.DataFrame([[title_date]]).to_excel(xw, sheet_name="FT PROCURED ", index=False, header=False)
+        ft.to_excel(xw, sheet_name="FT PROCURED ", index=False, startrow=1)
+        pd.DataFrame(wsf_rows).to_excel(xw, sheet_name="WSF PROCURED", index=False, header=False)
+    fuel.to_excel(paths.inbox / f"FT COASTERS FUELING FOR HUBS SUNDAY {we.strftime('%dTH %B %Y').upper()}.xlsx",
+                  sheet_name="Coaster Fueling Schedule", index=False)
+    al = pd.DataFrame([[i + 1, no, name, 22, n, c, n * c, None, None, None, None, None, n * c]
+                       for i, (no, name, n, c) in enumerate(alloc)],
+                      columns=["S/NO", "AREA NO", "AREA NAME", "MINIMUM CAPACITY OF  BUSES APPROVED (22-SEATER LT)",
+                               "NEW TOTAL NUMBER OF BUSES", "APPROVED COST/BUS", "TOTAL EXPECTED SPEND PER WEEK",
+                               "Total Spent", "ACCUMULATED BALANCE", "PAYABLE FOR FT PROCURED PREVIOUS", "Total Spent 2",
+                               "ACCUMULATED BALANCE 2", f"PAYABLE FOR FT PROCURED SUNDAY {we:%d%m%Y}"])
+    al.to_excel(paths.inbox / f"FT PROCURED FOR {we.day}th {we:%b %Y}.xlsx", sheet_name="ACCUMULATED BALANCE",
+                index=False)
 
 
 def main(argv=None):

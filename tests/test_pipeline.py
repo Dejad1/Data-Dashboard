@@ -51,7 +51,8 @@ def db(root) -> sqlite3.Connection:
 
 def test_all_streams_loaded(root):
     con = db(root)
-    for table in ("wsf_cells", "wsf_zone", "midweek", "chop", "community", "transport_ops", "transport_fin"):
+    for table in ("wsf_cells", "wsf_zone", "midweek", "chop", "community", "transport_runs", "transport_costs",
+                  "transport_budget"):
         weeks = con.execute(f"SELECT COUNT(DISTINCT week_ending) FROM {table}").fetchone()[0]
         assert weeks == N_WEEKS, table
 
@@ -66,7 +67,9 @@ def test_injected_errors_are_logged(root):
                      ("MIDWEEK", "Unknown Zone (not in MASTER_ZONES)"),
                      ("CHOP", "CHOP report from a zone without CHOP (Has_CHOP = N)"),
                      ("CHOP", "Adult total mismatch"),
-                     ("TRANSPORT_OPS", "Unknown vehicle (not in MASTER_FLEET)")]:
+                     ("TRANSPORT FT_PROCURED", "Unknown Area"),
+                     ("TRANSPORT FT_PROCURED", "Number cleaned"),
+                     ("TRANSPORT COASTER_FUEL", "Pump price differs from the rest of the sheet")]:
         assert expected in got, expected
 
 
@@ -100,18 +103,22 @@ def test_reingest_same_file_does_not_double_count(root, tmp_path):
     con = db(root)
     before = {t: con.execute(f"SELECT COUNT(*), SUM(male) FROM {t}").fetchone()
               for t in ("wsf_cells", "wsf_zone", "midweek", "chop")}
-    fin_before = con.execute("SELECT COUNT(*), SUM(amount) FROM transport_fin").fetchone()
+    transport_before = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()
+                        for t in ("transport_runs", "transport_costs", "transport_budget")}
     con.close()
     processed = root / "inbox" / "processed"
     resend = [p for p in processed.iterdir() if "Midweek" in p.name or "WSF cell" in p.name
-              or "Covenant" in p.name or "finance" in p.name][:8]
+              or "Covenant" in p.name][:6]
+    resend += [p for p in processed.iterdir() if "Transport raw" in p.name or "FUELING" in p.name
+               or "FT PROCURED" in p.name][:3]
     for p in resend:
         shutil.copy(p, root / "inbox" / p.name.split("_", 1)[1])
     summary = ingest.run(root, build=False, quiet=True)
     con = db(root)
     after = {t: con.execute(f"SELECT COUNT(*), SUM(male) FROM {t}").fetchone() for t in before}
     assert after == before
-    assert con.execute("SELECT COUNT(*), SUM(amount) FROM transport_fin").fetchone() == fin_before
+    for t, before_t in transport_before.items():
+        assert con.execute(f"SELECT COUNT(*) FROM {t}").fetchone() == before_t, t
     # everything re-sent was counted as a replacement, not a new row
     for stream, (loaded, replaced, _rej) in summary.items():
         assert loaded == replaced, stream
@@ -127,6 +134,36 @@ def test_header_detection_and_aliases(tmp_path):
     assert sorted(mapping.values()) == ["children", "date", "female", "male", "zone"]
     assert ingest.detect_stream(set(mapping.values()), "Zonal Midweek wk36.xlsx", "Sheet1") == "MIDWEEK"
     assert ingest.parse_date("02/09/2026") == dt.date(2026, 9, 2)   # day first (Nigeria)
+
+
+SAMPLES = Path(__import__("os").environ.get(
+    "OPS_SAMPLES", "/root/.claude/uploads/e0198d9f-6c86-5d5b-85b9-0a9576ba4c38"))
+
+
+@pytest.mark.skipif(not list(SAMPLES.glob("*Transport_raw_reports*.xlsx")), reason="real sample files not present")
+def test_real_transport_samples_27_sept(tmp_path):
+    """The transport office's own files for 27 Sept 2026 (not in the repo: they contain names)."""
+    root = tmp_path / "real"
+    (root / "masters").mkdir(parents=True)
+    shutil.copy(HERE.parent / "masters" / "MASTER_AREAS.csv", root / "masters" / "MASTER_AREAS.csv")
+    (root / "inbox").mkdir()
+    for pattern in ("*Transport_raw_reports*", "*FT_COASTERS_FUELING*", "*FT_PROCURED_FOR*", "*EV__Tata*"):
+        for f in list(SAMPLES.glob(pattern))[:1]:
+            shutil.copy(f, root / "inbox" / f.name)
+    ingest.run(root, build=False, quiet=True)
+    con = db(root)
+    q = lambda sql: con.execute(sql).fetchone()
+    assert q("SELECT DISTINCT week_ending FROM transport_runs") == ("2026-09-27",)
+    # WSF Procured matches the sheet's own riders and cost totals
+    assert q("SELECT SUM(male+female+children), SUM(cost) FROM transport_runs WHERE category='WSF Procured'") == (
+        9775, 19670000.0)
+    # FT Procured: 859 buses marked in church; cost is the sheet's ₦54,267,500 plus Ikoyi's text '170-,000'
+    assert q("SELECT SUM(in_church='Y'), SUM(cost) FROM transport_runs WHERE category='FT Procured'") == (
+        859, 54437500.0)
+    # coaster fuel actually paid (HUB coasters) = ₦7,574,800
+    assert q("SELECT SUM(amount) FROM transport_costs WHERE payable='Y'") == (7574800.0,)
+    assert q("SELECT COUNT(*) FROM transport_budget") == (92,)
+    assert q("SELECT COUNT(*) FROM dq_log WHERE severity='Rejected'") == (0,)
 
 
 # --------------------------------------------------------------------------
@@ -235,6 +272,48 @@ def test_wsf_dashboard_scenarios(root, tmp_path, name, scope, select, week, wind
     if scope == "Area":
         assert got["rank_box"] != "n/a"
     assert scan(out)["total_errors"] == 0
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice not installed")
+@pytest.mark.parametrize("scope", ["Global", "Area"])
+def test_transport_dashboard(root, tmp_path, scope):
+    """Transport only: dashboard numbers match an independent pandas calculation."""
+    areas = pd.read_csv(root / "masters" / "MASTER_AREAS.csv", dtype=str)
+    sel = areas.Area_Name.iloc[1] if scope == "Area" else None
+    wb = load_workbook(root / "Operations_Dashboard.xlsx")
+    ws = wb["TRANSPORT DASHBOARD"]
+    ws["B4"], ws["E4"], ws["I4"], ws["K4"] = scope, sel, "Latest", 4
+    out = tmp_path / f"transport_{scope}.xlsx"
+    wb.save(out)
+    recalc(out)
+    assert scan(out)["total_errors"] == 0
+    c = load_workbook(out, data_only=True)["CALC_TRANSPORT"]
+    con = db(root)
+    runs = pd.read_sql("SELECT * FROM transport_runs", con)
+    costs = pd.read_sql("SELECT * FROM transport_costs", con)
+    budget = pd.read_sql("SELECT * FROM transport_budget", con)
+    wk = runs.week_ending.max()
+    if sel:
+        runs, costs, budget = runs[runs.area == sel], costs[costs.area == sel], budget[budget.area == sel]
+    r, cs, b = runs[runs.week_ending == wk], costs[costs.week_ending == wk], budget[budget.week_ending == wk]
+    riders = int((r.male + r.female + r.children).sum())
+    spend = r.cost.sum() + cs.loc[cs.payable == "Y", "amount"].sum()
+    ran = r.loc[r.status == "Ran", "buses"].sum()
+    seats_rows = r[(r.status == "Ran") & r.capacity.notna() & (r.capacity > 0)]
+    seats = (seats_rows.capacity * seats_rows.trips.clip(lower=1)).sum()
+    util = (seats_rows.male + seats_rows.female + seats_rows.children).sum() / seats
+    ft_budget = (b.buses_allocated * b.cost_per_bus).sum()
+    ft_cost = r.loc[r.category == "FT Procured", "cost"].sum()
+    got = {k: c[f"B{90 + i}"].value for i, k in enumerate(
+        ["riders", "ran", "listed", "pct_ran", "seats", "util", "spend", "central", "members", "fuel", "cpr", "cpb",
+         "cps", "ft_vs_budget", "breakdowns"])}
+    assert got["riders"] == riders
+    assert got["ran"] == ran
+    assert abs(got["spend"] - spend) < 0.01
+    assert abs(got["seats"] - seats) < 0.01
+    assert abs(got["util"] - util) < 1e-9
+    assert abs(got["ft_vs_budget"] - ft_cost / ft_budget) < 1e-9
+    assert got["breakdowns"] == int((r.status == "Breakdown").sum())
 
 
 @pytest.mark.skipif(not HAS_LO, reason="LibreOffice not installed")
